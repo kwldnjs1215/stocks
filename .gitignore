@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Data (개인 데이터 제외)
+data/portfolio_data.json
+
+# Claude Code
+.claude/
+
+# 개인 거래 데이터
+data/*.xls
+data/*.xlsx
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

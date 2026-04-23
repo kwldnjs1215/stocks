@@ -1,0 +1,2 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\김지원\\PycharmProjects\\project\\stocks']
+ERROR:    [WinError 10013] 액세스 권한에 의해 숨겨진 소켓에 액세스를 시도했습니다
