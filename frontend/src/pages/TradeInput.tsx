@@ -30,13 +30,22 @@ export default function TradeInput({ onDataUpdate }: Props) {
     })
   }, [])
 
+  // FastAPI 에러 detail이 배열일 수 있으므로 문자열로 변환
+  const parseError = (d: any, fallback: string): string => {
+    if (!d) return fallback
+    if (typeof d.detail === 'string') return d.detail
+    if (Array.isArray(d.detail)) return d.detail.map((e: any) => e.msg ?? JSON.stringify(e)).join(', ')
+    return fallback
+  }
+
   const handleTrade = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!stockName.trim()) { setMsg({ type: 'err', text: '종목명을 입력하세요.' }); return }
+    const safeAmount = isNaN(amount) ? 0 : Math.round(amount)
     const res = await fetch('/api/trades', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ section_name: sectionName, month, stock_name: stockName.trim(), amount, realized }),
+      body: JSON.stringify({ section_name: sectionName, month, stock_name: stockName.trim(), amount: safeAmount, realized }),
     })
     if (res.ok) {
       setMsg({ type: 'ok', text: `${month} / ${stockName} 수익을 저장했습니다.` })
@@ -44,7 +53,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
       onDataUpdate?.()
     } else {
       const d = await res.json()
-      setMsg({ type: 'err', text: d.detail || '저장 실패' })
+      setMsg({ type: 'err', text: parseError(d, '저장 실패') })
     }
   }
 
@@ -63,7 +72,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
       onDataUpdate?.()
     } else {
       const d = await res.json()
-      setAddMsg({ type: 'err', text: d.detail || '추가 실패' })
+      setAddMsg({ type: 'err', text: parseError(d, '추가 실패') })
     }
   }
 
@@ -110,7 +119,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
             </div>
             <div>
               <label className="text-xs font-medium text-slate-500 mb-1 block">수익 금액</label>
-              <input type="number" className={inputCls} value={amount} onChange={e => setAmount(Number(e.target.value))} step={1} />
+              <input type="number" className={inputCls} value={amount} onChange={e => { const v = Number(e.target.value); setAmount(isNaN(v) ? 0 : v) }} step={1} />
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
               <input type="checkbox" checked={realized} onChange={e => setRealized(e.target.checked)}
