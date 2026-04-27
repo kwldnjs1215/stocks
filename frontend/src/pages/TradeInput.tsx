@@ -41,7 +41,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
   const handleTrade = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!stockName.trim()) { setMsg({ type: 'err', text: '종목명을 입력하세요.' }); return }
-    const safeAmount = isNaN(amount) ? 0 : Math.round(amount)
+    const safeAmount = isNaN(amount) ? 0 : amount
     const res = await fetch('/api/trades', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -119,7 +119,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
             </div>
             <div>
               <label className="text-xs font-medium text-slate-500 mb-1 block">수익 금액</label>
-              <input type="number" className={inputCls} value={amount} onChange={e => { const v = Number(e.target.value); setAmount(isNaN(v) ? 0 : v) }} step={1} />
+              <input type="number" className={inputCls} value={amount} onChange={e => { const v = Number(e.target.value); setAmount(isNaN(v) ? 0 : v) }} step="any" />
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
               <input type="checkbox" checked={realized} onChange={e => setRealized(e.target.checked)}

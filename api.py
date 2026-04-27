@@ -760,7 +760,7 @@ class TradeInput(BaseModel):
     section_name: str
     month: str
     stock_name: str
-    amount: int
+    amount: float   # USD는 소수점 허용 (e.g. 9.72)
     realized: bool = False
 
 
