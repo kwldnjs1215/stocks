@@ -10,10 +10,13 @@ interface Props { onDataUpdate?: () => void }
 export default function TradeInput({ onDataUpdate }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [sectionName, setSectionName] = useState('')
+  const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()])
   const [stockName, setStockName] = useState('')
   const [amount, setAmount] = useState(0)
   const [realized, setRealized] = useState(false)
+
+  const YEARS = Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i)
   const [newStock, setNewStock] = useState('')
   const [newRealized, setNewRealized] = useState(false)
   const [addSectionName, setAddSectionName] = useState('')
@@ -45,7 +48,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
     const res = await fetch('/api/trades', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ section_name: sectionName, month, stock_name: stockName.trim(), amount: safeAmount, realized }),
+      body: JSON.stringify({ section_name: sectionName, year, month, stock_name: stockName.trim(), amount: safeAmount, realized }),
     })
     if (res.ok) {
       setMsg({ type: 'ok', text: `${month} / ${stockName} 수익을 저장했습니다.` })
@@ -100,11 +103,19 @@ export default function TradeInput({ onDataUpdate }: Props) {
                 {sections.map(s => <option key={s.name}>{s.name}</option>)}
               </select>
             </div>
-            <div>
-              <label className="text-xs font-medium text-slate-500 mb-1 block">월</label>
-              <select className={selectCls} value={month} onChange={e => setMonth(e.target.value)}>
-                {MONTHS.map(m => <option key={m}>{m}</option>)}
-              </select>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">연도</label>
+                <select className={selectCls} value={year} onChange={e => setYear(Number(e.target.value))}>
+                  {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 mb-1 block">월</label>
+                <select className={selectCls} value={month} onChange={e => setMonth(e.target.value)}>
+                  {MONTHS.map(m => <option key={m}>{m}</option>)}
+                </select>
+              </div>
             </div>
             <div>
               <label className="text-xs font-medium text-slate-500 mb-1 block">종목명</label>

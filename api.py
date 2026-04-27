@@ -317,12 +317,67 @@ def get_currency(section_name: str) -> str:
     return SECTION_CURRENCIES.get(section_name, "KRW")
 
 
-def section_month_total(rows: dict, month: str) -> int:
+def section_month_total(rows: dict, month: str) -> float:
     return sum(rows.get(month, {}).values())
 
 
-def section_total(rows: dict) -> int:
+def section_total(rows: dict) -> float:
     return sum(sum(v.values()) for v in rows.values())
+
+
+def get_rows_for_year(section: dict, year: int | None) -> dict:
+    """rows_by_year 기준으로 연도 필터링. year=None이면 전 연도 합산. rows_by_year 없으면 legacy rows 반환."""
+    rows_by_year = section.get("rows_by_year", {})
+    if not rows_by_year:
+        return section.get("rows", {})
+    if year is not None:
+        return rows_by_year.get(str(year), {})
+    # 전체 합산
+    combined: dict = {}
+    for yr_data in rows_by_year.values():
+        for month, stocks in yr_data.items():
+            m = combined.setdefault(month, {})
+            for stock, val in stocks.items():
+                m[stock] = m.get(stock, 0) + val
+    return combined or section.get("rows", {})
+
+
+def get_manual_annual_totals(sections: list, usd_rate: float) -> dict[int, float]:
+    """rows_by_year 기준 연도별 수익 합산 → {year: profit_krw}"""
+    result: dict[int, float] = defaultdict(float)
+    for section in sections:
+        rows_by_year = section.get("rows_by_year", {})
+        currency = get_currency(section.get("name", ""))
+        for year_str, year_data in rows_by_year.items():
+            try:
+                year = int(year_str)
+            except ValueError:
+                continue
+            total = sum(sum(month.values()) for month in year_data.values())
+            result[year] += total * usd_rate if currency == "USD" else total
+    return dict(result)
+
+
+def merge_annual_with_manual(xls_annual: list, manual_totals: dict[int, float]) -> list:
+    """XLS 연간 데이터 + 수동 입력 수익 병합. 수동 입력만 있는 연도도 포함."""
+    xls_by_year = {row["year"]: dict(row) for row in xls_annual}
+    all_years = sorted(set(list(xls_by_year.keys()) + list(manual_totals.keys())))
+    result = []
+    for year in all_years:
+        manual = manual_totals.get(year, 0.0)
+        if year in xls_by_year:
+            row = dict(xls_by_year[year])
+            row["realized_profit_krw"] = round(row["realized_profit_krw"] + manual)
+            row["manual_profit_krw"] = round(manual)
+        else:
+            row = {
+                "year": year,
+                "realized_profit_krw": round(manual),
+                "manual_profit_krw": round(manual),
+                "sells": 0, "wins": 0, "win_rate": 0.0, "avg_hold_days": 0.0,
+            }
+        result.append(row)
+    return result
 
 
 def compute_yearly_principal_map(settings: dict[str, Any]) -> tuple[dict[int, int], dict[int, int]]:
@@ -626,43 +681,62 @@ def get_dashboard():
     for section in sections_raw:
         name = section.get("name", "")
         currency = get_currency(name)
-        rows = section.get("rows", {})
-        s_total = section_total(rows)
+
+        # 전체 합산 (all-time): rows_by_year 우선, 없으면 legacy rows
+        rows_all = get_rows_for_year(section, None)
+        s_total = section_total(rows_all)
         s_total_krw = round(s_total * usd_rate) if currency == "USD" else s_total
         total_profit_krw += s_total_krw
 
-        monthly = []
-        cumulative = 0
-        for month in MONTHS:
-            m_total = section_month_total(rows, month)
-            cumulative += m_total
-            monthly.append({"month": month, "profit": m_total, "cumulative": cumulative})
+        def build_monthly(rows: dict) -> list:
+            result, cum = [], 0.0
+            for month in MONTHS:
+                m = section_month_total(rows, month)
+                cum += m
+                result.append({"month": month, "profit": m, "cumulative": cum})
+            return result
 
-        stock_cumulative: dict[str, int] = {}
-        stocks_monthly = []
-        for month in MONTHS:
-            entry: dict[str, Any] = {"month": month}
-            for stock in section.get("stocks", []):
-                sname = stock["name"]
-                val = rows.get(month, {}).get(sname, 0)
-                stock_cumulative[sname] = stock_cumulative.get(sname, 0) + val
-                entry[sname] = stock_cumulative[sname]
-            stocks_monthly.append(entry)
+        def build_stocks_monthly(rows: dict) -> list:
+            stock_cum: dict[str, float] = {}
+            out = []
+            for month in MONTHS:
+                entry: dict[str, Any] = {"month": month}
+                for stock in section.get("stocks", []):
+                    sname = stock["name"]
+                    val = rows.get(month, {}).get(sname, 0)
+                    stock_cum[sname] = stock_cum.get(sname, 0) + val
+                    entry[sname] = stock_cum[sname]
+                out.append(entry)
+            return out
+
+        # 연도별 월별 데이터
+        rows_by_year = section.get("rows_by_year", {})
+        monthly_by_year: dict[str, list] = {}
+        total_by_year: dict[str, float] = {}
+        for yr_str, yr_rows in rows_by_year.items():
+            monthly_by_year[yr_str] = build_monthly(yr_rows)
+            yr_total = section_total(yr_rows)
+            total_by_year[yr_str] = round(yr_total * usd_rate) if currency == "USD" else yr_total
 
         sections_out.append({
             "name": name,
             "currency": currency,
             "total": s_total,
             "total_krw": s_total_krw,
+            "total_by_year": total_by_year,
             "stocks": section.get("stocks", []),
-            "monthly": monthly,
-            "stocks_monthly": stocks_monthly,
+            "monthly": build_monthly(rows_all),
+            "monthly_by_year": monthly_by_year,
+            "stocks_monthly": build_stocks_monthly(rows_all),
         })
 
     analytics = compute_trade_analytics(usd_rate)
+    manual_annual = get_manual_annual_totals(sections_raw, usd_rate)
+    merged_annual = merge_annual_with_manual(analytics["annual"], manual_annual)
+
     yearly_delta, year_end_principal = compute_yearly_principal_map(settings)
     yearly_summary = []
-    for row in analytics["annual"]:
+    for row in merged_annual:
         year = row["year"]
         principal = year_end_principal.get(year, 0)
         delta = yearly_delta.get(year, 0)
@@ -704,33 +778,50 @@ def get_analytics():
     raw = load_json_data()
     usd_rate = parse_int(raw.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW)) or DEFAULT_USD_TO_KRW
     analytics = compute_trade_analytics(usd_rate)
-    style = infer_trading_style(analytics["annual"], analytics["buy_count"], analytics["sell_count"])
-    tips = build_improvement_tips(analytics)
-    # 수동 입력 데이터 (portfolio_data.json) 병합
-    raw = load_json_data()
-    usd_rate_raw = parse_int(raw.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW)) or DEFAULT_USD_TO_KRW
+
+    # 수동 입력 연도별 합산 → annual에 병합
+    sections_raw = raw.get("sections", [])
+    manual_annual = get_manual_annual_totals(sections_raw, usd_rate)
+    merged_annual = merge_annual_with_manual(analytics["annual"], manual_annual)
+
+    style = infer_trading_style(merged_annual, analytics["buy_count"], analytics["sell_count"])
+    tips = build_improvement_tips({**analytics, "annual": merged_annual})
+
+    # 수동 입력 섹션별 요약 (전체 연도 합산)
     manual_sections = []
-    for section in raw.get("sections", []):
+    for section in sections_raw:
         name = section.get("name", "")
         currency = get_currency(name)
-        rows = section.get("rows", {})
-        monthly = []
-        cumulative = 0
+        rows_all = get_rows_for_year(section, None)   # 전 연도 합산
+        total = section_total(rows_all)
+        total_krw = round(total * usd_rate) if currency == "USD" else total
+
+        monthly, cumulative = [], 0.0
         for month in MONTHS:
-            val = section_month_total(rows, month)
+            val = section_month_total(rows_all, month)
             cumulative += val
             monthly.append({"month": month, "profit": val, "cumulative": cumulative})
-        total = section_total(rows)
-        total_krw = round(total * usd_rate_raw) if currency == "USD" else total
 
-        # 종목별 합계
+        # 종목별 합계 (전 연도)
         stock_totals = []
         for stock in section.get("stocks", []):
             sname = stock["name"]
-            s_total = sum(rows.get(m, {}).get(sname, 0) for m in MONTHS)
+            s_total = sum(rows_all.get(m, {}).get(sname, 0) for m in MONTHS)
             if s_total != 0:
                 stock_totals.append({"name": sname, "total": s_total, "realized": stock.get("realized", False)})
         stock_totals.sort(key=lambda x: x["total"], reverse=True)
+
+        # 연도별 종목 합계
+        stock_totals_by_year: dict[str, list] = {}
+        for yr_str, yr_rows in section.get("rows_by_year", {}).items():
+            yr_stocks = []
+            for stock in section.get("stocks", []):
+                sname = stock["name"]
+                s_total_yr = sum(yr_rows.get(m, {}).get(sname, 0) for m in MONTHS)
+                if s_total_yr != 0:
+                    yr_stocks.append({"name": sname, "total": s_total_yr, "realized": stock.get("realized", False)})
+            yr_stocks.sort(key=lambda x: x["total"], reverse=True)
+            stock_totals_by_year[yr_str] = yr_stocks
 
         manual_sections.append({
             "name": name,
@@ -739,9 +830,16 @@ def get_analytics():
             "total_krw": total_krw,
             "monthly": monthly,
             "stock_totals": stock_totals,
+            "stock_totals_by_year": stock_totals_by_year,
         })
 
-    return {**analytics, "style": style, "tips": tips, "manual_sections": manual_sections}
+    return {
+        **analytics,
+        "annual": merged_annual,
+        "style": style,
+        "tips": tips,
+        "manual_sections": manual_sections,
+    }
 
 
 @app.get("/api/settings")
@@ -762,6 +860,7 @@ class TradeInput(BaseModel):
     stock_name: str
     amount: float   # USD는 소수점 허용 (e.g. 9.72)
     realized: bool = False
+    year: int = datetime.now().year
 
 
 @app.post("/api/trades")
@@ -773,12 +872,13 @@ def add_trade(body: TradeInput):
         raise HTTPException(status_code=404, detail="섹션을 찾을 수 없습니다.")
 
     stocks = section.setdefault("stocks", [])
-    existing = next((s for s in stocks if s["name"] == body.stock_name), None)
-    if not existing:
+    if not any(s["name"] == body.stock_name for s in stocks):
         stocks.append({"name": body.stock_name, "realized": body.realized})
 
-    rows = section.setdefault("rows", {})
-    month_rows = rows.setdefault(body.month, {})
+    # rows_by_year에 연도별 저장
+    rows_by_year = section.setdefault("rows_by_year", {})
+    year_rows = rows_by_year.setdefault(str(body.year), {})
+    month_rows = year_rows.setdefault(body.month, {})
     month_rows[body.stock_name] = month_rows.get(body.stock_name, 0) + body.amount
 
     save_data(raw)
