@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { LayoutDashboard, TrendingUp, ArrowLeftRight, BarChart2, Newspaper, Activity } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { LayoutDashboard, TrendingUp, ArrowLeftRight, BarChart2, Newspaper, Activity, CloudOff, Cloud, RefreshCw, CloudDownload } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import TradeInput from './pages/TradeInput'
 import CashFlow from './pages/CashFlow'
@@ -18,11 +18,90 @@ const PAGES = [
 
 type PageId = typeof PAGES[number]['id']
 
+interface GithubStatus {
+  configured: boolean
+  repo: string
+  branch: string
+  last_sync: number
+  status: string
+}
+
+function SyncBadge({ status, onSync }: { status: GithubStatus | null; onSync: () => void }) {
+  const [syncing, setSyncing] = useState(false)
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      await fetch('/api/github/sync', { method: 'POST' })
+      onSync()
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  if (!status) return null
+
+  if (!status.configured) {
+    return (
+      <div className="flex items-center gap-1.5 text-slate-600 text-xs">
+        <CloudOff size={13} />
+        <span>GitHub 미설정</span>
+      </div>
+    )
+  }
+
+  const lastSync = status.last_sync > 0
+    ? new Date(status.last_sync * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+    : null
+
+  const isError = status.status.includes('오류') || status.status.includes('실패')
+
+  return (
+    <div className="space-y-1.5">
+      <div className={`flex items-center gap-1.5 text-xs ${isError ? 'text-red-400' : 'text-green-400'}`}>
+        <Cloud size={13} />
+        <span className="truncate">{status.status}</span>
+      </div>
+      {lastSync && (
+        <div className="text-slate-500 text-xs">{lastSync} 동기화</div>
+      )}
+      <button
+        onClick={handleSync}
+        disabled={syncing}
+        className="flex items-center gap-1 text-slate-500 hover:text-slate-300 text-xs transition-colors disabled:opacity-50"
+      >
+        {syncing
+          ? <RefreshCw size={11} className="animate-spin" />
+          : <CloudDownload size={11} />
+        }
+        {syncing ? '가져오는 중...' : 'GitHub에서 가져오기'}
+      </button>
+    </div>
+  )
+}
+
 export default function App() {
   const [page, setPage] = useState<PageId>('dashboard')
   const [refreshKey, setRefreshKey] = useState(0)
+  const [ghStatus, setGhStatus] = useState<GithubStatus | null>(null)
 
-  const handleDataUpdate = () => setRefreshKey(k => k + 1)
+  const fetchGhStatus = useCallback(async () => {
+    try {
+      const r = await fetch('/api/github/status')
+      setGhStatus(await r.json())
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchGhStatus()
+  }, [fetchGhStatus])
+
+  const handleDataUpdate = () => {
+    setRefreshKey(k => k + 1)
+    setTimeout(fetchGhStatus, 2000)
+  }
 
   return (
     <div className="flex h-screen bg-slate-100">
@@ -47,8 +126,9 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="px-5 py-4 border-t border-slate-700">
-          <p className="text-slate-500 text-xs">2021 – 2026</p>
+        <div className="px-5 py-4 border-t border-slate-700 space-y-3">
+          <SyncBadge status={ghStatus} onSync={() => { fetchGhStatus(); setRefreshKey(k => k + 1) }} />
+          <p className="text-slate-600 text-xs">2021 – 2026</p>
         </div>
       </aside>
 

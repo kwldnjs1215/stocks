@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time as _time
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from html.parser import HTMLParser
@@ -15,6 +18,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# .env 파일 지원 (python-dotenv가 있으면 로드)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_PATH = DATA_DIR / "portfolio_data.json"
@@ -26,7 +36,104 @@ DEFAULT_INITIAL_PRINCIPAL_KRW = 9_378_327
 USER_DEPOSIT_TYPES = {"이체입금", "오픈뱅킹은행입금이체"}
 USER_WITHDRAWAL_TYPES = {"이체출금", "은행이체출금", "간편송금 계좌출금", "미약정대체출금"}
 
-app = FastAPI(title="Stock Dashboard API")
+
+# ── GitHub 동기화 ─────────────────────────────────────────────────────────────
+
+_GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+_GH_REPO = os.environ.get("GITHUB_REPO", "")          # e.g. "username/stocks"
+_GH_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+_GH_FILE_PATH = os.environ.get("GITHUB_FILE_PATH", "data/portfolio_data.json")
+
+_gh_last_sync: float = 0.0
+_gh_status: str = "미설정"
+
+
+def _gh_configured() -> bool:
+    return bool(_GH_TOKEN and _GH_REPO)
+
+
+def _gh_headers() -> dict:
+    return {"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github+json"}
+
+
+def _gh_url() -> str:
+    return f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_FILE_PATH}"
+
+
+def _gh_get_sha() -> str | None:
+    try:
+        r = _requests.get(_gh_url(), headers=_gh_headers(), params={"ref": _GH_BRANCH}, timeout=10)
+        return r.json().get("sha") if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def github_pull() -> bool:
+    """GitHub에서 portfolio_data.json을 받아 로컬에 저장."""
+    global _gh_status
+    if not _gh_configured():
+        return False
+    try:
+        r = _requests.get(_gh_url(), headers=_gh_headers(), params={"ref": _GH_BRANCH}, timeout=10)
+        if r.status_code != 200:
+            _gh_status = f"풀 실패: {r.status_code}"
+            return False
+        content = base64.b64decode(r.json()["content"]).decode("utf-8")
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        DATA_PATH.write_text(content, encoding="utf-8")
+        _gh_status = "동기화됨"
+        return True
+    except Exception as e:
+        _gh_status = f"풀 오류: {str(e)[:60]}"
+        return False
+
+
+def github_push(raw: dict) -> bool:
+    """로컬 데이터를 GitHub에 업로드."""
+    global _gh_last_sync, _gh_status
+    if not _gh_configured():
+        return False
+    try:
+        content_b64 = base64.b64encode(
+            json.dumps(raw, ensure_ascii=False, indent=2).encode("utf-8")
+        ).decode("ascii")
+        sha = _gh_get_sha()
+        payload: dict = {
+            "message": f"portfolio update {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "content": content_b64,
+            "branch": _GH_BRANCH,
+        }
+        if sha:
+            payload["sha"] = sha
+        r = _requests.put(_gh_url(), headers=_gh_headers(), json=payload, timeout=15)
+        if r.status_code in (200, 201):
+            _gh_last_sync = _time.time()
+            _gh_status = "동기화됨"
+            return True
+        _gh_status = f"푸시 실패: {r.status_code}"
+        return False
+    except Exception as e:
+        _gh_status = f"푸시 오류: {str(e)[:60]}"
+        return False
+
+
+def save_data(raw: dict) -> None:
+    """데이터를 로컬 저장 후 GitHub에 자동 푸시."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    github_push(raw)
+
+
+# ── FastAPI 앱 ────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if _gh_configured():
+        github_pull()
+    yield
+
+
+app = FastAPI(title="Stock Dashboard API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -674,8 +781,7 @@ def add_trade(body: TradeInput):
     month_rows = rows.setdefault(body.month, {})
     month_rows[body.stock_name] = month_rows.get(body.stock_name, 0) + body.amount
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    DATA_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_data(raw)
     return {"ok": True}
 
 
@@ -700,8 +806,7 @@ def add_stock(body: StockAdd):
         for month in MONTHS:
             rows.setdefault(month, {})[body.stock_name] = 0
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    DATA_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_data(raw)
     return {"ok": True}
 
 
@@ -718,9 +823,28 @@ def add_cashflow(body: CashFlowAdd):
     flows = raw.get("cash_flows", [])
     flows.append({"date": body.date, "type": body.type, "amount": body.amount, "memo": body.memo})
     raw["cash_flows"] = flows
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    DATA_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_data(raw)
     return {"ok": True}
+
+
+@app.get("/api/github/status")
+def github_status():
+    return {
+        "configured": _gh_configured(),
+        "repo": _GH_REPO if _gh_configured() else "",
+        "branch": _GH_BRANCH,
+        "last_sync": _gh_last_sync,
+        "status": _gh_status,
+    }
+
+
+@app.post("/api/github/sync")
+def github_sync_pull():
+    """GitHub에서 최신 데이터를 강제로 가져옴."""
+    if not _gh_configured():
+        raise HTTPException(status_code=400, detail="GitHub 설정(GITHUB_TOKEN, GITHUB_REPO)이 없습니다.")
+    ok = github_pull()
+    return {"ok": ok, "status": _gh_status}
 
 
 _market_cache: dict = {"data": None, "ts": 0.0}

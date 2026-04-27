@@ -1,3 +1,6 @@
+# 환경 변수 (GitHub 토큰 포함)
+.env
+
 # Python
 .venv/
 __pycache__/
