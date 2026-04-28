@@ -1,5 +1,7 @@
-# 환경 변수 (GitHub 토큰 포함)
+# 환경 변수 (GitHub 토큰 포함) — .env.example / .env.*.example 은 커밋됨
 .env
+.env.company
+.env.home
 
 # Python
 .venv/

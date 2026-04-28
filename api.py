@@ -18,10 +18,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# .env 파일 지원 (python-dotenv가 있으면 로드)
+# 프로필별 .env 파일 로드 (start.bat이 STOCKS_PROFILE 세팅)
 try:
     from dotenv import load_dotenv
-    load_dotenv(Path(__file__).resolve().parent / ".env")
+    _profile = os.environ.get("STOCKS_PROFILE", "")
+    _env_file = Path(__file__).resolve().parent / (f".env.{_profile}" if _profile else ".env")
+    load_dotenv(_env_file, override=False)  # bat이 이미 설정한 값 유지
 except ImportError:
     pass
 
