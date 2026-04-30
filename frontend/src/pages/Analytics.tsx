@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import { Card, KpiCard, SectionHeader, Divider } from '../components/Card'
 import { fmtKrw, fmtAmount, colorClass, MONTHS } from '../lib/utils'
+import { apiJson } from '../lib/api'
 import { TrendingUp, TrendingDown, Clock, Target, Zap, AlertCircle, Lightbulb, Shield, BarChart3, Scale } from 'lucide-react'
 
 interface AnnualRow {
@@ -135,11 +136,7 @@ export default function Analytics({ refreshKey = 0 }: Props) {
 
   useEffect(() => {
     setError(null)
-    fetch('/api/analytics')
-      .then(r => {
-        if (!r.ok) throw new Error(`서버 오류 ${r.status}`)
-        return r.json()
-      })
+    apiJson<AnalyticsData>('/api/analytics', 15000)
       .then(d => {
         setData(d)
         if (d.annual?.length) setSelectedYear(d.annual[d.annual.length - 1].year)

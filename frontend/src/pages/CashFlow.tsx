@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Card, KpiCard, SectionHeader } from '../components/Card'
 import { fmtKrw, colorClass } from '../lib/utils'
+import { apiJson } from '../lib/api'
 
 interface CashFlow { date: string; type: string; amount: number; memo: string }
 interface Settings { baseline_principal_krw: number; cash_flows: CashFlow[] }
@@ -23,8 +24,14 @@ export default function CashFlow({ onDataUpdate }: Props) {
   const [amount, setAmount] = useState(0)
   const [memo, setMemo] = useState('')
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const load = () => fetch('/api/settings').then(r => r.json()).then(setSettings)
+  const load = () => {
+    setLoadError(null)
+    return apiJson<Settings>('/api/settings')
+      .then(setSettings)
+      .catch(e => setLoadError(e instanceof Error ? e.message : '입출금 데이터를 불러오지 못했습니다.'))
+  }
   useEffect(() => { load() }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -46,6 +53,14 @@ export default function CashFlow({ onDataUpdate }: Props) {
   }
 
   const inputCls = 'w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white'
+
+  if (loadError) return (
+    <div className="flex flex-col items-center justify-center h-64 gap-3">
+      <p className="text-red-500 text-sm font-medium">입출금 데이터를 불러오지 못했습니다.</p>
+      <p className="text-slate-400 text-xs">{loadError}</p>
+      <button onClick={load} className="text-xs text-blue-500 underline">다시 시도</button>
+    </div>
+  )
 
   if (!settings) return (
     <div className="flex items-center justify-center h-64">

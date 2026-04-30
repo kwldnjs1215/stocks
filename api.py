@@ -328,20 +328,39 @@ def section_total(rows: dict) -> float:
 
 
 def get_rows_for_year(section: dict, year: int | None) -> dict:
-    """rows_by_year 기준으로 연도 필터링. year=None이면 전 연도 합산. rows_by_year 없으면 legacy rows 반환."""
+    """Return manual rows for a year.
+
+    Older data was stored in section["rows"] without a year. Treat those rows as
+    current-year data so existing manual entries remain visible after the newer
+    rows_by_year format was introduced.
+    """
+    legacy_rows = section.get("rows", {})
     rows_by_year = section.get("rows_by_year", {})
     if not rows_by_year:
-        return section.get("rows", {})
+        return legacy_rows
+
+    def merge_rows(base: dict, extra: dict) -> dict:
+        merged = {month: dict(stocks) for month, stocks in base.items()}
+        for month, stocks in extra.items():
+            m = merged.setdefault(month, {})
+            for stock, val in stocks.items():
+                m[stock] = m.get(stock, 0) + val
+        return merged
+
     if year is not None:
-        return rows_by_year.get(str(year), {})
+        year_rows = rows_by_year.get(str(year), {})
+        if year == datetime.now().year:
+            return merge_rows(legacy_rows, year_rows)
+        return year_rows
+
     # 전체 합산
-    combined: dict = {}
+    combined: dict = {month: dict(stocks) for month, stocks in legacy_rows.items()}
     for yr_data in rows_by_year.values():
         for month, stocks in yr_data.items():
             m = combined.setdefault(month, {})
             for stock, val in stocks.items():
                 m[stock] = m.get(stock, 0) + val
-    return combined or section.get("rows", {})
+    return combined or legacy_rows
 
 
 def get_manual_annual_totals(sections: list, usd_rate: float) -> dict[int, float]:
@@ -350,6 +369,9 @@ def get_manual_annual_totals(sections: list, usd_rate: float) -> dict[int, float
     for section in sections:
         rows_by_year = section.get("rows_by_year", {})
         currency = get_currency(section.get("name", ""))
+        legacy_total = sum(sum(month.values()) for month in section.get("rows", {}).values())
+        if legacy_total:
+            result[datetime.now().year] += legacy_total * usd_rate if currency == "USD" else legacy_total
         for year_str, year_data in rows_by_year.items():
             try:
                 year = int(year_str)
@@ -715,10 +737,18 @@ def get_dashboard():
         rows_by_year = section.get("rows_by_year", {})
         monthly_by_year: dict[str, list] = {}
         total_by_year: dict[str, float] = {}
-        for yr_str, yr_rows in rows_by_year.items():
+        stocks_monthly_by_year: dict[str, list] = {}
+        year_keys = set(rows_by_year.keys())
+        if section.get("rows"):
+            year_keys.add(str(datetime.now().year))
+        for yr_str in sorted(year_keys):
+            try:
+                yr_rows = get_rows_for_year(section, int(yr_str))
+            except ValueError:
+                yr_rows = rows_by_year.get(yr_str, {})
             monthly_by_year[yr_str] = build_monthly(yr_rows)
-            yr_total = section_total(yr_rows)
-            total_by_year[yr_str] = round(yr_total * usd_rate) if currency == "USD" else yr_total
+            stocks_monthly_by_year[yr_str] = build_stocks_monthly(yr_rows)
+            total_by_year[yr_str] = section_total(yr_rows)
 
         sections_out.append({
             "name": name,
@@ -730,6 +760,7 @@ def get_dashboard():
             "monthly": build_monthly(rows_all),
             "monthly_by_year": monthly_by_year,
             "stocks_monthly": build_stocks_monthly(rows_all),
+            "stocks_monthly_by_year": stocks_monthly_by_year,
         })
 
     analytics = compute_trade_analytics(usd_rate)

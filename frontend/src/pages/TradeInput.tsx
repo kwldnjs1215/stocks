@@ -13,7 +13,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
   const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()])
   const [stockName, setStockName] = useState('')
-  const [amount, setAmount] = useState(0)
+  const [amount, setAmount] = useState('')
   const [realized, setRealized] = useState(false)
 
   const YEARS = Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i)
@@ -44,15 +44,19 @@ export default function TradeInput({ onDataUpdate }: Props) {
   const handleTrade = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!stockName.trim()) { setMsg({ type: 'err', text: '종목명을 입력하세요.' }); return }
-    const safeAmount = isNaN(amount) ? 0 : amount
+    const safeAmount = Number(amount)
+    if (amount.trim() === '' || isNaN(safeAmount)) {
+      setMsg({ type: 'err', text: '손익 금액을 숫자로 입력하세요. 손실은 -로 입력하면 됩니다.' })
+      return
+    }
     const res = await fetch('/api/trades', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ section_name: sectionName, year, month, stock_name: stockName.trim(), amount: safeAmount, realized }),
     })
     if (res.ok) {
-      setMsg({ type: 'ok', text: `${month} / ${stockName} 수익을 저장했습니다.` })
-      setStockName(''); setAmount(0)
+      setMsg({ type: 'ok', text: `${month} / ${stockName} 손익을 저장했습니다.` })
+      setStockName(''); setAmount('')
       onDataUpdate?.()
     } else {
       const d = await res.json()
@@ -89,13 +93,13 @@ export default function TradeInput({ onDataUpdate }: Props) {
     <div className="space-y-6 max-w-2xl">
       <div>
         <h1 className="text-2xl font-bold text-slate-800">매매 입력</h1>
-        <p className="text-sm text-slate-400 mt-1">월별 수익 기록 및 종목 추가</p>
+        <p className="text-sm text-slate-400 mt-1">월별 손익 기록 및 종목 추가</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        {/* 수익 입력 */}
+        {/* 손익 입력 */}
         <Card className="p-5">
-          <SectionHeader title="수익 반영" />
+          <SectionHeader title="손익 반영" />
           <form onSubmit={handleTrade} className="space-y-3">
             <div>
               <label className="text-xs font-medium text-slate-500 mb-1 block">시장</label>
@@ -129,8 +133,15 @@ export default function TradeInput({ onDataUpdate }: Props) {
               </datalist>
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-500 mb-1 block">수익 금액</label>
-              <input type="number" className={inputCls} value={amount} onChange={e => { const v = Number(e.target.value); setAmount(isNaN(v) ? 0 : v) }} step="any" />
+              <label className="text-xs font-medium text-slate-500 mb-1 block">손익 금액</label>
+              <input
+                type="number"
+                className={inputCls}
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+                step="any"
+                placeholder="수익 100, 손실 -100"
+              />
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
               <input type="checkbox" checked={realized} onChange={e => setRealized(e.target.checked)}
@@ -139,7 +150,7 @@ export default function TradeInput({ onDataUpdate }: Props) {
             </label>
             <button type="submit"
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg text-sm transition-colors">
-              수익 저장
+              손익 저장
             </button>
             {msg && (
               <p className={`text-xs rounded-lg px-3 py-2 ${msg.type === 'ok' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>

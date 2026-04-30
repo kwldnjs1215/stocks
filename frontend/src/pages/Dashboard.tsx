@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import { Card, KpiCard, SectionHeader, Divider } from '../components/Card'
 import { fmtKrw, fmtAmount, fmtRate, colorClass, MONTHS } from '../lib/utils'
+import { apiJson } from '../lib/api'
 
 interface MonthlyStat { month: string; profit: number; cumulative: number }
 interface StockMonthly { month: string; [stock: string]: number | string }
@@ -15,6 +16,7 @@ interface Section {
   monthly: MonthlyStat[]
   monthly_by_year: Record<string, MonthlyStat[]>
   stocks_monthly: StockMonthly[]
+  stocks_monthly_by_year: Record<string, StockMonthly[]>
 }
 interface YearlySummary {
   year: number; realized_profit_krw: number; manual_profit_krw?: number
@@ -23,6 +25,7 @@ interface YearlySummary {
 }
 interface DashboardData {
   current_principal: number; total_profit_krw: number
+  settings: { usd_to_krw_rate: number }
   sections: Section[]; yearly_summary: YearlySummary[]
 }
 
@@ -33,17 +36,28 @@ interface Props { refreshKey?: number }
 export default function Dashboard({ refreshKey = 0 }: Props) {
   const [data, setData] = useState<DashboardData | null>(null)
   const [selectedYear, setSelectedYear] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/dashboard')
-      .then(r => r.json())
+    setError(null)
+    apiJson<DashboardData>('/api/dashboard')
       .then(d => {
         setData(d)
         if (d.yearly_summary?.length) {
           setSelectedYear(d.yearly_summary[d.yearly_summary.length - 1].year)
         }
       })
+      .catch(e => setError(e instanceof Error ? e.message : '대시보드 데이터를 불러오지 못했습니다.'))
   }, [refreshKey])
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <p className="text-red-500 text-sm font-medium">대시보드 데이터를 불러오지 못했습니다.</p>
+        <p className="text-slate-400 text-xs">{error}</p>
+      </div>
+    )
+  }
 
   if (!data) {
     return (
@@ -53,8 +67,16 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
     )
   }
 
-  const { current_principal, total_profit_krw, sections, yearly_summary } = data
-  const returnRate = current_principal > 0 ? (total_profit_krw / current_principal) * 100 : 0
+  const { current_principal, sections, yearly_summary, settings } = data
+  const displayYear = selectedYear ?? yearly_summary[yearly_summary.length - 1]?.year ?? new Date().getFullYear()
+  const displayYearKey = displayYear.toString()
+  const getSectionTotal = (section: Section) =>
+    section.total_by_year[displayYearKey] != null ? section.total_by_year[displayYearKey] : section.total
+  const selectedYearTotalKrw = sections.reduce((sum, section) => {
+    const total = getSectionTotal(section)
+    return sum + (section.currency === 'USD' ? Math.round(total * settings.usd_to_krw_rate) : total)
+  }, 0)
+  const returnRate = current_principal > 0 ? (selectedYearTotalKrw / current_principal) * 100 : 0
 
   return (
     <div className="space-y-6">
@@ -67,9 +89,9 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
       {/* KPI 카드 */}
       <div className="grid grid-cols-4 gap-4">
         <KpiCard
-          label="현재 연도 총 수익"
-          value={fmtKrw(total_profit_krw)}
-          valueClass={colorClass(total_profit_krw)}
+          label={`${displayYear}년 총 수익`}
+          value={fmtKrw(selectedYearTotalKrw)}
+          valueClass={colorClass(selectedYearTotalKrw)}
           sub={`현재 원금 ${fmtKrw(current_principal)}`}
         />
         <KpiCard
@@ -81,8 +103,8 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
           <KpiCard
             key={s.name}
             label={`${s.name} 수익`}
-            value={fmtAmount(s.total, s.currency)}
-            valueClass={colorClass(s.total)}
+            value={fmtAmount(getSectionTotal(s), s.currency)}
+            valueClass={colorClass(getSectionTotal(s))}
           />
         ))}
       </div>
@@ -129,6 +151,9 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
         // 연도 선택 시 해당 연도 데이터, 없으면 전체
         const yearKey = selectedYear?.toString() ?? ''
         const monthly = (yearKey && section.monthly_by_year[yearKey]) ? section.monthly_by_year[yearKey] : section.monthly
+        const stocksMonthly = (yearKey && section.stocks_monthly_by_year?.[yearKey])
+          ? section.stocks_monthly_by_year[yearKey]
+          : section.stocks_monthly
         const sectionTotal = (yearKey && section.total_by_year[yearKey] != null)
           ? section.total_by_year[yearKey]
           : section.total
@@ -170,7 +195,7 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={200}>
-                    <AreaChart data={section.stocks_monthly} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                    <AreaChart data={stocksMonthly} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                       <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false}
@@ -220,8 +245,8 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
                         <tr key={mon} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                           <td className="px-4 py-2.5 text-slate-600 font-medium">{mon}</td>
                           {section.stocks.map(s => {
-                            const stockRow = (section.stocks_monthly.find(r => r.month === mon) || {}) as Record<string, number | string>
-                            const prevRow = (idx > 0 ? section.stocks_monthly.find(r => r.month === MONTHS[idx - 1]) : null) as Record<string, number | string> | null
+                            const stockRow = (stocksMonthly.find(r => r.month === mon) || {}) as Record<string, number | string>
+                            const prevRow = (idx > 0 ? stocksMonthly.find(r => r.month === MONTHS[idx - 1]) : null) as Record<string, number | string> | null
                             const prev = prevRow ? (prevRow[s.name] as number || 0) : 0
                             const val = (stockRow[s.name] as number || 0) - prev
                             return (
