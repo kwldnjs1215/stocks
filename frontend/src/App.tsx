@@ -1,16 +1,20 @@
 import { useState, useEffect, useCallback } from 'react'
-import { LayoutDashboard, TrendingUp, ArrowLeftRight, BarChart2, Newspaper, Activity, CloudOff, Cloud, RefreshCw, CloudDownload } from 'lucide-react'
+import { LayoutDashboard, TrendingUp, ArrowLeftRight, BarChart2, Newspaper, Activity, CloudOff, Cloud, RefreshCw, CloudDownload, Search, Bot } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import TradeInput from './pages/TradeInput'
 import CashFlow from './pages/CashFlow'
 import Analytics from './pages/Analytics'
 import MarketOverview from './pages/MarketOverview'
 import SectorTrend from './pages/SectorTrend'
+import StockResearch from './pages/StockResearch'
+import TradingBot from './pages/TradingBot'
 
 const PAGES = [
   { id: 'dashboard', label: '대시보드', icon: LayoutDashboard },
   { id: 'market', label: '시황', icon: Newspaper },
   { id: 'trend', label: '섹터 추이', icon: Activity },
+  { id: 'research', label: '종목 분석', icon: Search },
+  { id: 'tradingBot', label: '자동매매', icon: Bot },
   { id: 'trade', label: '매매 입력', icon: TrendingUp },
   { id: 'cashflow', label: '입출금', icon: ArrowLeftRight },
   { id: 'analytics', label: '분석', icon: BarChart2 },
@@ -137,6 +141,8 @@ export default function App() {
           {page === 'dashboard' && <Dashboard refreshKey={refreshKey} />}
           {page === 'market' && <MarketOverview />}
           {page === 'trend' && <SectorTrend />}
+          {page === 'research' && <StockResearch />}
+          {page === 'tradingBot' && <TradingBot />}
           {page === 'trade' && <TradeInput onDataUpdate={handleDataUpdate} />}
           {page === 'cashflow' && <CashFlow onDataUpdate={handleDataUpdate} />}
           {page === 'analytics' && <Analytics refreshKey={refreshKey} />}

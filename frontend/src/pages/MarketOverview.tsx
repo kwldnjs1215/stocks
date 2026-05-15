@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw, TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react'
-import { Card, KpiCard, SectionHeader } from '../components/Card'
+import { Card, SectionHeader } from '../components/Card'
 
 interface Sector {
   name: string
@@ -27,12 +27,6 @@ interface MarketData {
     trend: string
   }
   updated_at: string
-}
-
-function changeColor(v: number) {
-  if (v > 0) return 'text-red-500'
-  if (v < 0) return 'text-blue-500'
-  return 'text-slate-400'
 }
 
 function changeBg(v: number) {

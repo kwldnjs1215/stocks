@@ -1,0 +1,40 @@
+{
+  "config": {
+    "enabled": false,
+    "dry_run": true,
+    "market": "KR",
+    "strategy_name": "surge_scalping",
+    "open_scan_time": "09:03",
+    "scan_end_time": "10:30",
+    "universe_top_n": 50,
+    "candidate_limit": 12,
+    "capital_krw": 100000,
+    "max_positions": 1,
+    "per_trade_budget_krw": 90000,
+    "min_stock_price_krw": 1000,
+    "max_stock_price_krw": 30000,
+    "min_trade_value_krw": 5000000000,
+    "min_intraday_range_pct": 3.0,
+    "min_change_pct": 5.0,
+    "buy_split_pct": [
+      60,
+      40
+    ],
+    "add_buy_pullback_pct": -0.6,
+    "add_buy_breakout_pct": 0.8,
+    "stop_loss_pct": -1.3,
+    "take_profit_pct": 1.8,
+    "sell_split_pct": [
+      50,
+      50
+    ],
+    "first_take_profit_pct": 0.8,
+    "second_take_profit_pct": 1.8,
+    "trailing_stop_pct": 0.6,
+    "force_exit_time": "10:45",
+    "cooldown_minutes": 10,
+    "last_open_scan_date": ""
+  },
+  "runs": [],
+  "positions": []
+}

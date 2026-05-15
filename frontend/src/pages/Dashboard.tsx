@@ -35,7 +35,7 @@ interface Props { refreshKey?: number }
 
 export default function Dashboard({ refreshKey = 0 }: Props) {
   const [data, setData] = useState<DashboardData | null>(null)
-  const [selectedYear, setSelectedYear] = useState<number | null>(null)
+  const [selectedPerformanceYear, setSelectedPerformanceYear] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -43,8 +43,12 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
     apiJson<DashboardData>('/api/dashboard')
       .then(d => {
         setData(d)
-        if (d.yearly_summary?.length) {
-          setSelectedYear(d.yearly_summary[d.yearly_summary.length - 1].year)
+        const sectionYears = d.sections
+          ?.flatMap(s => Object.keys(s.total_by_year).map(Number).filter(Number.isFinite)) ?? []
+        const currentYear = Math.max(new Date().getFullYear(), ...sectionYears)
+        const completedYears = d.yearly_summary?.filter(y => y.year < currentYear) ?? []
+        if (completedYears.length) {
+          setSelectedPerformanceYear(completedYears[completedYears.length - 1].year)
         }
       })
       .catch(e => setError(e instanceof Error ? e.message : '대시보드 데이터를 불러오지 못했습니다.'))
@@ -68,8 +72,14 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
   }
 
   const { current_principal, sections, yearly_summary, settings } = data
-  const displayYear = selectedYear ?? yearly_summary[yearly_summary.length - 1]?.year ?? new Date().getFullYear()
-  const displayYearKey = displayYear.toString()
+  const sectionYears = sections.flatMap(s => Object.keys(s.total_by_year).map(Number).filter(Number.isFinite))
+  const currentYear = Math.max(new Date().getFullYear(), ...sectionYears)
+  const completedYearlySummary = yearly_summary.filter(y => y.year < currentYear)
+  const activePerformanceYear =
+    selectedPerformanceYear && completedYearlySummary.some(y => y.year === selectedPerformanceYear)
+      ? selectedPerformanceYear
+      : completedYearlySummary[completedYearlySummary.length - 1]?.year
+  const displayYearKey = currentYear.toString()
   const getSectionTotal = (section: Section) =>
     section.total_by_year[displayYearKey] != null ? section.total_by_year[displayYearKey] : section.total
   const selectedYearTotalKrw = sections.reduce((sum, section) => {
@@ -89,7 +99,7 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
       {/* KPI 카드 */}
       <div className="grid grid-cols-4 gap-4">
         <KpiCard
-          label={`${displayYear}년 총 수익`}
+          label={`${currentYear}년 총 수익`}
           value={fmtKrw(selectedYearTotalKrw)}
           valueClass={colorClass(selectedYearTotalKrw)}
           sub={`현재 원금 ${fmtKrw(current_principal)}`}
@@ -110,17 +120,17 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
       </div>
 
       {/* 연도별 성과 */}
-      {yearly_summary.length > 0 && (
+      {completedYearlySummary.length > 0 && (
         <>
           <Divider />
           <SectionHeader title="연도별 원금 대비 수익률" />
           <div className="flex gap-2 flex-wrap mb-4">
-            {yearly_summary.map(y => (
+            {completedYearlySummary.map(y => (
               <button
                 key={y.year}
-                onClick={() => setSelectedYear(y.year)}
+                onClick={() => setSelectedPerformanceYear(y.year)}
                 className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
-                  selectedYear === y.year
+                  activePerformanceYear === y.year
                     ? 'bg-blue-600 text-white'
                     : 'bg-white border border-slate-200 text-slate-600 hover:border-blue-300'
                 }`}
@@ -130,8 +140,8 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
             ))}
           </div>
 
-          {selectedYear && (() => {
-            const y = yearly_summary.find(r => r.year === selectedYear)!
+          {activePerformanceYear && (() => {
+            const y = completedYearlySummary.find(r => r.year === activePerformanceYear)!
             return (
               <div className="grid grid-cols-4 gap-4">
                 <KpiCard label="실현손익 (합계)" value={fmtKrw(y.realized_profit_krw)} valueClass={colorClass(y.realized_profit_krw)}
@@ -148,8 +158,7 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
 
       {/* 섹션별 월별 차트 */}
       {sections.map(section => {
-        // 연도 선택 시 해당 연도 데이터, 없으면 전체
-        const yearKey = selectedYear?.toString() ?? ''
+        const yearKey = currentYear.toString()
         const monthly = (yearKey && section.monthly_by_year[yearKey]) ? section.monthly_by_year[yearKey] : section.monthly
         const stocksMonthly = (yearKey && section.stocks_monthly_by_year?.[yearKey])
           ? section.stocks_monthly_by_year[yearKey]
@@ -157,7 +166,7 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
         const sectionTotal = (yearKey && section.total_by_year[yearKey] != null)
           ? section.total_by_year[yearKey]
           : section.total
-        const yearLabel = selectedYear ? `${selectedYear}년` : '전체'
+        const yearLabel = `${currentYear}년`
 
         return (
           <div key={section.name}>

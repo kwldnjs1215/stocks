@@ -3,7 +3,7 @@ import { RefreshCw, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import {
   LineChart, Line, ResponsiveContainer, Tooltip, YAxis,
 } from 'recharts'
-import { Card, SectionHeader } from '../components/Card'
+import { Card } from '../components/Card'
 
 interface SparkPoint {
   date: string
@@ -48,7 +48,7 @@ function MomentumBadge({ m }: { m: SectorData['momentum'] }) {
   )
 }
 
-function StatBox({ label, value, up }: { label: string; value: number; up?: boolean }) {
+function StatBox({ label, value }: { label: string; value: number }) {
   const color = value > 0 ? 'text-red-500' : value < 0 ? 'text-blue-500' : 'text-slate-400'
   return (
     <div className="text-center">
@@ -215,7 +215,7 @@ export default function SectorTrend() {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <div className="text-slate-400 text-sm">ETF 데이터 수집 중... (최초 10~20초)</div>
-        <div className="text-slate-300 text-xs">TIGER 반도체, 2차전지, 방산 등 10개 섹터</div>
+        <div className="text-slate-300 text-xs">TIGER 반도체, 2차전지, 방산 등 12개 섹터</div>
       </div>
     )
   }

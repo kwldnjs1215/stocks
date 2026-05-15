@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
 import time as _time
@@ -18,6 +19,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from stock_analysis import answer_stock_question, build_stock_analysis
+from trading_engine import (
+    append_rule_note,
+    list_trading_journal_dates,
+    read_trading_rules,
+    read_trading_journal,
+    reset_trading_for_surge_scalping,
+    run_open_scan,
+    should_run_open_scan,
+    trading_status,
+    update_trading_config,
+    write_trading_rules,
+)
+
 # 프로필별 .env 파일 로드 (start.bat이 STOCKS_PROFILE 세팅)
 try:
     from dotenv import load_dotenv
@@ -33,6 +48,10 @@ DATA_PATH = DATA_DIR / "portfolio_data.json"
 MONTHS = [f"{m}월" for m in range(1, 13)]
 DEFAULT_SECTION_NAMES = ["미국주식", "국내주식"]
 SECTION_CURRENCIES = {"미국주식": "USD", "국내주식": "KRW"}
+SYMBOL_NAME_KEY = "종목명"
+REALIZED_PROFIT_KEY = "실현손익"
+SELL_COUNT_KEY = "매도횟수"
+TRADE_COUNT_KEY = "거래횟수"
 DEFAULT_USD_TO_KRW = 1350
 DEFAULT_INITIAL_PRINCIPAL_KRW = 9_378_327
 USER_DEPOSIT_TYPES = {"이체입금", "오픈뱅킹은행입금이체"}
@@ -130,9 +149,17 @@ def save_data(raw: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    scheduler = asyncio.create_task(trading_scheduler_loop())
     if _gh_configured():
         github_pull()
-    yield
+    try:
+        yield
+    finally:
+        scheduler.cancel()
+        try:
+            await scheduler
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Stock Dashboard API", lifespan=lifespan)
@@ -142,6 +169,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def trading_scheduler_loop() -> None:
+    while True:
+        try:
+            if should_run_open_scan():
+                await asyncio.to_thread(run_open_scan)
+        except Exception:
+            pass
+        await asyncio.sleep(60)
 
 
 # ── 파서 ──────────────────────────────────────────────────────────────────────
@@ -363,6 +400,91 @@ def get_rows_for_year(section: dict, year: int | None) -> dict:
     return combined or legacy_rows
 
 
+def yearly_data_path(year: int) -> Path:
+    return DATA_DIR / f"portfolio_data_{year}.json"
+
+
+def make_empty_portfolio_data(base: dict[str, Any] | None = None) -> dict[str, Any]:
+    base = base or load_json_data()
+    return {
+        "owner_name": base.get("owner_name", ""),
+        "baseline_principal_krw": parse_int(base.get("baseline_principal_krw", DEFAULT_INITIAL_PRINCIPAL_KRW)) or DEFAULT_INITIAL_PRINCIPAL_KRW,
+        "usd_to_krw_rate": parse_int(base.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW)) or DEFAULT_USD_TO_KRW,
+        "cash_flows": base.get("cash_flows", []),
+        "sections": [
+            {"name": name, "stocks": [], "rows": {month: {} for month in MONTHS}}
+            for name in DEFAULT_SECTION_NAMES
+        ],
+    }
+
+
+def load_yearly_data(year: int) -> dict[str, Any]:
+    path = yearly_data_path(year)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    if year == datetime.now().year and DATA_PATH.exists():
+        return load_json_data()
+    return make_empty_portfolio_data()
+
+
+def save_yearly_data(year: int, raw: dict[str, Any]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    yearly_data_path(year).write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    if year == datetime.now().year:
+        DATA_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def list_yearly_data() -> list[tuple[int, dict[str, Any]]]:
+    result: list[tuple[int, dict[str, Any]]] = []
+    for path in sorted(DATA_DIR.glob("portfolio_data_*.json")):
+        try:
+            year = int(path.stem.rsplit("_", 1)[1])
+            result.append((year, json.loads(path.read_text(encoding="utf-8"))))
+        except Exception:
+            continue
+    if not result:
+        current_year = datetime.now().year
+        result.append((current_year, load_yearly_data(current_year)))
+    return result
+
+
+def sync_current_year_portfolio_file() -> dict[str, Any]:
+    current_year = datetime.now().year
+    raw = load_json_data()
+    save_yearly_data(current_year, raw)
+    return {"ok": True, "year": current_year, "path": str(yearly_data_path(current_year))}
+
+
+def combine_yearly_portfolio_data(include_live_current: bool = False) -> dict[str, Any]:
+    year_items = list_yearly_data()
+    if include_live_current:
+        current_year = datetime.now().year
+        year_items = [(year, raw) for year, raw in year_items if year != current_year]
+        year_items.append((current_year, load_json_data()))
+        year_items.sort(key=lambda item: item[0])
+    base = load_yearly_data(datetime.now().year)
+    combined = make_empty_portfolio_data(base)
+    sections_by_name = {section["name"]: section for section in combined["sections"]}
+
+    for year, raw in year_items:
+        for section in raw.get("sections", []):
+            name = section.get("name", "")
+            if name not in sections_by_name:
+                sections_by_name[name] = {"name": name, "stocks": [], "rows_by_year": {}}
+                combined["sections"].append(sections_by_name[name])
+            target = sections_by_name[name]
+            target.setdefault("rows_by_year", {})[str(year)] = get_rows_for_year(section, year)
+            known = {stock.get("name") for stock in target.setdefault("stocks", [])}
+            for stock in section.get("stocks", []):
+                if stock.get("name") not in known:
+                    target["stocks"].append({"name": stock.get("name", ""), "realized": stock.get("realized", True)})
+                    known.add(stock.get("name"))
+    return combined
+
+
 def get_manual_annual_totals(sections: list, usd_rate: float) -> dict[int, float]:
     """rows_by_year 기준 연도별 수익 합산 → {year: profit_krw}"""
     result: dict[int, float] = defaultdict(float)
@@ -404,6 +526,243 @@ def merge_annual_with_manual(xls_annual: list, manual_totals: dict[int, float]) 
     return result
 
 
+def build_yearly_portfolio_files_from_xls() -> dict[str, Any]:
+    base = load_json_data()
+    records = load_trade_records()
+    inventory: dict[tuple, deque] = defaultdict(deque)
+    yearly: dict[int, dict[str, Any]] = {}
+
+    def ensure_year(year: int) -> dict[str, Any]:
+        if year not in yearly:
+            yearly[year] = make_empty_portfolio_data(base)
+        return yearly[year]
+
+    def ensure_section(raw: dict[str, Any], section_name: str) -> dict[str, Any]:
+        sections = raw.setdefault("sections", [])
+        section = next((s for s in sections if s.get("name") == section_name), None)
+        if not section:
+            section = {"name": section_name, "stocks": [], "rows": {month: {} for month in MONTHS}}
+            sections.append(section)
+        section.setdefault("stocks", [])
+        section.setdefault("rows", {month: {} for month in MONTHS})
+        return section
+
+    for record in records:
+        action = record.get("거래유형", "").strip()
+        if action not in {"매수", "매도"}:
+            continue
+        detail = record.get("상세내용", "").strip()
+        symbol = record.get("종목명", "").strip() or "기타"
+        try:
+            trade_date = parse_trade_date(record.get("실거래일자", ""))
+        except Exception:
+            continue
+        quantity = parse_number(record.get("수량", 0))
+        if quantity <= 0:
+            continue
+        settlement = parse_number(record.get("정산금액", 0)) or parse_number(record.get("거래금액", 0))
+        currency = "USD" if "외화증권" in detail else "KRW"
+        key = (symbol, currency)
+
+        if action == "매수":
+            inventory[key].append({"qty": quantity, "cost_per_unit": settlement / quantity, "date": trade_date})
+            continue
+
+        proceeds = settlement
+        remaining = quantity
+        cost_basis = 0.0
+        while remaining > 0 and inventory[key]:
+            lot = inventory[key][0]
+            matched = min(remaining, lot["qty"])
+            cost_basis += matched * lot["cost_per_unit"]
+            lot["qty"] -= matched
+            remaining -= matched
+            if lot["qty"] <= 0:
+                inventory[key].popleft()
+        if remaining > 0:
+            cost_basis += remaining * (proceeds / quantity)
+
+        realized_native = proceeds - cost_basis
+        if realized_native == 0:
+            continue
+
+        raw = ensure_year(trade_date.year)
+        section_name = "미국주식" if currency == "USD" else "국내주식"
+        section = ensure_section(raw, section_name)
+        stocks = section.setdefault("stocks", [])
+        if not any(s.get("name") == symbol for s in stocks):
+            stocks.append({"name": symbol, "realized": True})
+        month_rows = section.setdefault("rows", {}).setdefault(f"{trade_date.month}월", {})
+        month_rows[symbol] = month_rows.get(symbol, 0) + realized_native
+
+    current_year = datetime.now().year
+    current_raw = load_json_data()
+    if current_raw.get("sections"):
+        yearly[current_year] = current_raw
+
+    for year, raw in yearly.items():
+        save_yearly_data(year, raw)
+
+    return {"ok": True, "years": sorted(yearly.keys()), "count": len(yearly)}
+
+
+def compute_manual_trade_analytics(sections: list, usd_to_krw_rate: int) -> dict[str, Any]:
+    annual: dict[int, dict] = defaultdict(lambda: {"profit_krw": 0, "sells": 0, "wins": 0, "losses": 0, "hold_days": 0.0})
+    symbol_profit: dict[str, int] = defaultdict(int)
+    symbol_count: dict[str, int] = defaultdict(int)
+    symbol_trade_count: dict[str, int] = defaultdict(int)
+    monthly_profit: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    source_years: set[int] = set()
+    sell_count = usd_trade_count = krw_trade_count = 0
+
+    for section in sections:
+        currency = get_currency(section.get("name", ""))
+
+        def add_rows(year: int, rows: dict) -> None:
+            nonlocal sell_count, usd_trade_count, krw_trade_count
+            for month, stocks in rows.items():
+                if not isinstance(stocks, dict):
+                    continue
+                for symbol, value in stocks.items():
+                    amount = parse_number(value)
+                    if amount == 0:
+                        continue
+                    source_years.add(year)
+                    realized_krw = round(amount * usd_to_krw_rate) if currency == "USD" else round(amount)
+                    symbol_name = str(symbol).strip() or "기타"
+
+                    annual[year]["profit_krw"] += realized_krw
+                    annual[year]["sells"] += 1
+                    annual[year]["wins"] += 1 if realized_krw > 0 else 0
+                    annual[year]["losses"] += 1 if realized_krw < 0 else 0
+                    symbol_profit[symbol_name] += realized_krw
+                    symbol_count[symbol_name] += 1
+                    symbol_trade_count[symbol_name] += 1
+                    monthly_profit[year][month] += realized_krw
+                    sell_count += 1
+                    if currency == "USD":
+                        usd_trade_count += 1
+                    else:
+                        krw_trade_count += 1
+
+        legacy_rows = section.get("rows", {})
+        if legacy_rows:
+            add_rows(datetime.now().year, legacy_rows)
+        for year_str, rows in section.get("rows_by_year", {}).items():
+            try:
+                add_rows(int(year_str), rows)
+            except ValueError:
+                continue
+
+    annual_list = [
+        {
+            "year": year,
+            "realized_profit_krw": int(v["profit_krw"]),
+            "manual_profit_krw": int(v["profit_krw"]),
+            "sells": int(v["sells"]),
+            "wins": int(v["wins"]),
+            "losses": int(v["losses"]),
+            "win_rate": round(v["wins"] / v["sells"] * 100, 1) if v["sells"] else 0.0,
+            "avg_hold_days": 0.0,
+        }
+        for year, v in sorted(annual.items())
+    ]
+
+    return {
+        "annual": annual_list,
+        "symbol_profit": sorted(
+            [{SYMBOL_NAME_KEY: k, REALIZED_PROFIT_KEY: int(v)} for k, v in symbol_profit.items()],
+            key=lambda x: x[REALIZED_PROFIT_KEY],
+            reverse=True,
+        ),
+        "symbol_count": sorted(
+            [{SYMBOL_NAME_KEY: k, SELL_COUNT_KEY: int(v)} for k, v in symbol_count.items()],
+            key=lambda x: x[SELL_COUNT_KEY],
+            reverse=True,
+        ),
+        "symbol_trade": sorted(
+            [{SYMBOL_NAME_KEY: k, TRADE_COUNT_KEY: int(v)} for k, v in symbol_trade_count.items()],
+            key=lambda x: x[TRADE_COUNT_KEY],
+            reverse=True,
+        ),
+        "monthly_profit": {str(yr): dict(mv) for yr, mv in monthly_profit.items()},
+        "buy_count": 0,
+        "sell_count": sell_count,
+        "usd_trade_count": usd_trade_count,
+        "krw_trade_count": krw_trade_count,
+        "source_years": source_years,
+    }
+
+
+def merge_trade_analytics(primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    annual_by_year: dict[int, dict[str, Any]] = {}
+    for source in (primary, extra):
+        for row in source.get("annual", []):
+            year = int(row["year"])
+            current = annual_by_year.setdefault(
+                year,
+                {
+                    "year": year,
+                    "realized_profit_krw": 0,
+                    "manual_profit_krw": 0,
+                    "sells": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "_hold_days_total": 0.0,
+                },
+            )
+            sells = int(row.get("sells", 0))
+            current["realized_profit_krw"] += int(row.get("realized_profit_krw", 0))
+            current["manual_profit_krw"] += int(row.get("manual_profit_krw", 0))
+            current["sells"] += sells
+            current["wins"] += int(row.get("wins", 0))
+            current["losses"] += int(row.get("losses", 0))
+            current["_hold_days_total"] += float(row.get("avg_hold_days", 0.0)) * sells
+
+    annual_list = []
+    for year, row in sorted(annual_by_year.items()):
+        sells = int(row["sells"])
+        annual_list.append({
+            "year": year,
+            "realized_profit_krw": int(row["realized_profit_krw"]),
+            "manual_profit_krw": int(row["manual_profit_krw"]),
+            "sells": sells,
+            "wins": int(row["wins"]),
+            "losses": int(row["losses"]),
+            "win_rate": round(row["wins"] / sells * 100, 1) if sells else 0.0,
+            "avg_hold_days": round(row["_hold_days_total"] / sells, 1) if sells else 0.0,
+        })
+
+    def merge_ranked(key: str, value_key: str) -> list[dict[str, Any]]:
+        merged: dict[str, int] = defaultdict(int)
+        for source in (primary, extra):
+            for row in source.get(key, []):
+                merged[str(row[SYMBOL_NAME_KEY])] += int(row[value_key])
+        return sorted(
+            [{SYMBOL_NAME_KEY: name, value_key: value} for name, value in merged.items()],
+            key=lambda x: x[value_key],
+            reverse=True,
+        )
+
+    monthly_profit: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for source in (primary, extra):
+        for year, months in source.get("monthly_profit", {}).items():
+            for month, value in months.items():
+                monthly_profit[str(year)][month] += int(value)
+
+    return {
+        "annual": annual_list,
+        "symbol_profit": merge_ranked("symbol_profit", REALIZED_PROFIT_KEY),
+        "symbol_count": merge_ranked("symbol_count", SELL_COUNT_KEY),
+        "symbol_trade": merge_ranked("symbol_trade", TRADE_COUNT_KEY),
+        "monthly_profit": {year: dict(months) for year, months in monthly_profit.items()},
+        "buy_count": int(primary.get("buy_count", 0)) + int(extra.get("buy_count", 0)),
+        "sell_count": int(primary.get("sell_count", 0)) + int(extra.get("sell_count", 0)),
+        "usd_trade_count": int(primary.get("usd_trade_count", 0)) + int(extra.get("usd_trade_count", 0)),
+        "krw_trade_count": int(primary.get("krw_trade_count", 0)) + int(extra.get("krw_trade_count", 0)),
+    }
+
+
 def compute_yearly_principal_map(settings: dict[str, Any]) -> tuple[dict[int, int], dict[int, int]]:
     yearly_delta: dict[int, int] = defaultdict(int)
     for record in load_cash_records():
@@ -441,8 +800,9 @@ def compute_yearly_principal_map(settings: dict[str, Any]) -> tuple[dict[int, in
     return dict(yearly_delta), year_end_principal
 
 
-def compute_trade_analytics(usd_to_krw_rate: int) -> dict[str, Any]:
+def compute_trade_analytics(usd_to_krw_rate: int, exclude_years: set[int] | None = None) -> dict[str, Any]:
     records = load_trade_records()
+    excluded = exclude_years or set()
     inventory: dict[tuple, deque] = defaultdict(deque)
     annual: dict[int, dict] = defaultdict(lambda: {"profit_krw": 0, "sells": 0, "wins": 0, "losses": 0, "hold_days": 0.0})
     symbol_profit: dict[str, int] = defaultdict(int)
@@ -460,6 +820,8 @@ def compute_trade_analytics(usd_to_krw_rate: int) -> dict[str, Any]:
         try:
             trade_date = parse_trade_date(record.get("실거래일자", ""))
         except Exception:
+            continue
+        if trade_date.year in excluded:
             continue
         quantity = parse_number(record.get("수량", 0))
         if quantity <= 0:
@@ -520,16 +882,16 @@ def compute_trade_analytics(usd_to_krw_rate: int) -> dict[str, Any]:
     ]
 
     symbol_profit_list = sorted(
-        [{"종목명": k, "실현손익": int(v)} for k, v in symbol_profit.items()],
-        key=lambda x: x["실현손익"], reverse=True
+        [{SYMBOL_NAME_KEY: k, REALIZED_PROFIT_KEY: int(v)} for k, v in symbol_profit.items()],
+        key=lambda x: x[REALIZED_PROFIT_KEY], reverse=True
     )
     symbol_count_list = sorted(
-        [{"종목명": k, "매도횟수": int(v)} for k, v in symbol_count.items()],
-        key=lambda x: x["매도횟수"], reverse=True
+        [{SYMBOL_NAME_KEY: k, SELL_COUNT_KEY: int(v)} for k, v in symbol_count.items()],
+        key=lambda x: x[SELL_COUNT_KEY], reverse=True
     )
     symbol_trade_list = sorted(
-        [{"종목명": k, "거래횟수": int(v)} for k, v in symbol_trade_count.items()],
-        key=lambda x: x["거래횟수"], reverse=True
+        [{SYMBOL_NAME_KEY: k, TRADE_COUNT_KEY: int(v)} for k, v in symbol_trade_count.items()],
+        key=lambda x: x[TRADE_COUNT_KEY], reverse=True
     )
 
     return {
@@ -690,6 +1052,8 @@ def build_improvement_tips(analytics: dict[str, Any]) -> list[str]:
 @app.get("/api/dashboard")
 def get_dashboard():
     raw = load_json_data()
+    current_year = datetime.now().year
+    current_year_key = str(current_year)
     settings = {
         "owner_name": raw.get("owner_name", ""),
         "baseline_principal_krw": parse_int(raw.get("baseline_principal_krw", DEFAULT_INITIAL_PRINCIPAL_KRW)) or DEFAULT_INITIAL_PRINCIPAL_KRW,
@@ -707,8 +1071,8 @@ def get_dashboard():
         currency = get_currency(name)
 
         # 전체 합산 (all-time): rows_by_year 우선, 없으면 legacy rows
-        rows_all = get_rows_for_year(section, None)
-        s_total = section_total(rows_all)
+        rows_current = get_rows_for_year(section, current_year)
+        s_total = section_total(rows_current)
         s_total_krw = round(s_total * usd_rate) if currency == "USD" else s_total
         total_profit_krw += s_total_krw
 
@@ -735,20 +1099,11 @@ def get_dashboard():
 
         # 연도별 월별 데이터
         rows_by_year = section.get("rows_by_year", {})
-        monthly_by_year: dict[str, list] = {}
-        total_by_year: dict[str, float] = {}
-        stocks_monthly_by_year: dict[str, list] = {}
-        year_keys = set(rows_by_year.keys())
-        if section.get("rows"):
-            year_keys.add(str(datetime.now().year))
-        for yr_str in sorted(year_keys):
-            try:
-                yr_rows = get_rows_for_year(section, int(yr_str))
-            except ValueError:
-                yr_rows = rows_by_year.get(yr_str, {})
-            monthly_by_year[yr_str] = build_monthly(yr_rows)
-            stocks_monthly_by_year[yr_str] = build_stocks_monthly(yr_rows)
-            total_by_year[yr_str] = section_total(yr_rows)
+        monthly_current = build_monthly(rows_current)
+        stocks_monthly_current = build_stocks_monthly(rows_current)
+        monthly_by_year = {current_year_key: monthly_current}
+        total_by_year = {current_year_key: s_total}
+        stocks_monthly_by_year = {current_year_key: stocks_monthly_current}
 
         sections_out.append({
             "name": name,
@@ -757,19 +1112,17 @@ def get_dashboard():
             "total_krw": s_total_krw,
             "total_by_year": total_by_year,
             "stocks": section.get("stocks", []),
-            "monthly": build_monthly(rows_all),
+            "monthly": monthly_current,
             "monthly_by_year": monthly_by_year,
-            "stocks_monthly": build_stocks_monthly(rows_all),
+            "stocks_monthly": stocks_monthly_current,
             "stocks_monthly_by_year": stocks_monthly_by_year,
         })
 
-    analytics = compute_trade_analytics(usd_rate)
-    manual_annual = get_manual_annual_totals(sections_raw, usd_rate)
-    merged_annual = merge_annual_with_manual(analytics["annual"], manual_annual)
+    analytics = compute_manual_trade_analytics(sections_raw, usd_rate)
 
     yearly_delta, year_end_principal = compute_yearly_principal_map(settings)
     yearly_summary = []
-    for row in merged_annual:
+    for row in analytics["annual"]:
         year = row["year"]
         principal = year_end_principal.get(year, 0)
         delta = yearly_delta.get(year, 0)
@@ -808,71 +1161,24 @@ def debug_asset():
 
 @app.get("/api/analytics")
 def get_analytics():
-    raw = load_json_data()
+    raw = combine_yearly_portfolio_data()
     usd_rate = parse_int(raw.get("usd_to_krw_rate", DEFAULT_USD_TO_KRW)) or DEFAULT_USD_TO_KRW
-    analytics = compute_trade_analytics(usd_rate)
-
-    # 수동 입력 연도별 합산 → annual에 병합
     sections_raw = raw.get("sections", [])
-    manual_annual = get_manual_annual_totals(sections_raw, usd_rate)
-    merged_annual = merge_annual_with_manual(analytics["annual"], manual_annual)
+    analytics = compute_manual_trade_analytics(sections_raw, usd_rate)
 
-    style = infer_trading_style(merged_annual, analytics["buy_count"], analytics["sell_count"])
-    tips = build_improvement_tips({**analytics, "annual": merged_annual})
-
-    # 수동 입력 섹션별 요약 (전체 연도 합산)
-    manual_sections = []
-    for section in sections_raw:
-        name = section.get("name", "")
-        currency = get_currency(name)
-        rows_all = get_rows_for_year(section, None)   # 전 연도 합산
-        total = section_total(rows_all)
-        total_krw = round(total * usd_rate) if currency == "USD" else total
-
-        monthly, cumulative = [], 0.0
-        for month in MONTHS:
-            val = section_month_total(rows_all, month)
-            cumulative += val
-            monthly.append({"month": month, "profit": val, "cumulative": cumulative})
-
-        # 종목별 합계 (전 연도)
-        stock_totals = []
-        for stock in section.get("stocks", []):
-            sname = stock["name"]
-            s_total = sum(rows_all.get(m, {}).get(sname, 0) for m in MONTHS)
-            if s_total != 0:
-                stock_totals.append({"name": sname, "total": s_total, "realized": stock.get("realized", False)})
-        stock_totals.sort(key=lambda x: x["total"], reverse=True)
-
-        # 연도별 종목 합계
-        stock_totals_by_year: dict[str, list] = {}
-        for yr_str, yr_rows in section.get("rows_by_year", {}).items():
-            yr_stocks = []
-            for stock in section.get("stocks", []):
-                sname = stock["name"]
-                s_total_yr = sum(yr_rows.get(m, {}).get(sname, 0) for m in MONTHS)
-                if s_total_yr != 0:
-                    yr_stocks.append({"name": sname, "total": s_total_yr, "realized": stock.get("realized", False)})
-            yr_stocks.sort(key=lambda x: x["total"], reverse=True)
-            stock_totals_by_year[yr_str] = yr_stocks
-
-        manual_sections.append({
-            "name": name,
-            "currency": currency,
-            "total": total,
-            "total_krw": total_krw,
-            "monthly": monthly,
-            "stock_totals": stock_totals,
-            "stock_totals_by_year": stock_totals_by_year,
-        })
+    style = infer_trading_style(analytics["annual"], analytics["buy_count"], analytics["sell_count"])
+    tips = build_improvement_tips(analytics)
 
     return {
         **analytics,
-        "annual": merged_annual,
         "style": style,
         "tips": tips,
-        "manual_sections": manual_sections,
     }
+
+
+@app.post("/api/analytics/refresh")
+def refresh_analytics_current_year():
+    return sync_current_year_portfolio_file()
 
 
 @app.get("/api/settings")
@@ -896,6 +1202,32 @@ class TradeInput(BaseModel):
     year: int = datetime.now().year
 
 
+class StockAnalysisInput(BaseModel):
+    symbol: str
+
+
+class StockAnalysisChatInput(BaseModel):
+    analysis: dict[str, Any]
+    question: str
+
+
+@app.post("/api/stock-analysis")
+def analyze_stock(body: StockAnalysisInput):
+    try:
+        return build_stock_analysis(body.symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"분석 실패: {str(e)[:80]}")
+
+
+@app.post("/api/stock-analysis/chat")
+def chat_stock_analysis(body: StockAnalysisChatInput):
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="질문을 입력해주세요.")
+    return {"answer": answer_stock_question(body.analysis, body.question)}
+
+
 @app.post("/api/trades")
 def add_trade(body: TradeInput):
     raw = load_json_data()
@@ -908,7 +1240,6 @@ def add_trade(body: TradeInput):
     if not any(s["name"] == body.stock_name for s in stocks):
         stocks.append({"name": body.stock_name, "realized": body.realized})
 
-    # rows_by_year에 연도별 저장
     rows_by_year = section.setdefault("rows_by_year", {})
     year_rows = rows_by_year.setdefault(str(body.year), {})
     month_rows = year_rows.setdefault(body.month, {})
@@ -978,6 +1309,83 @@ def github_sync_pull():
         raise HTTPException(status_code=400, detail="GitHub 설정(GITHUB_TOKEN, GITHUB_REPO)이 없습니다.")
     ok = github_pull()
     return {"ok": ok, "status": _gh_status}
+
+
+class TradingConfigPatch(BaseModel):
+    enabled: bool | None = None
+    dry_run: bool | None = None
+    open_scan_time: str | None = None
+    scan_end_time: str | None = None
+    universe_top_n: int | None = None
+    candidate_limit: int | None = None
+    capital_krw: int | None = None
+    max_positions: int | None = None
+    per_trade_budget_krw: int | None = None
+    min_stock_price_krw: int | None = None
+    max_stock_price_krw: int | None = None
+    min_trade_value_krw: int | None = None
+    min_intraday_range_pct: float | None = None
+    min_change_pct: float | None = None
+    buy_split_pct: list[float] | None = None
+    add_buy_pullback_pct: float | None = None
+    add_buy_breakout_pct: float | None = None
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
+    sell_split_pct: list[float] | None = None
+    first_take_profit_pct: float | None = None
+    second_take_profit_pct: float | None = None
+    trailing_stop_pct: float | None = None
+    force_exit_time: str | None = None
+    cooldown_minutes: int | None = None
+
+
+class TradingRulesUpdate(BaseModel):
+    content: str | None = None
+    note: str | None = None
+
+
+@app.get("/api/trading/status")
+def get_trading_status(journal_date: str | None = None):
+    return trading_status(journal_date)
+
+
+@app.patch("/api/trading/config")
+def patch_trading_config(patch: TradingConfigPatch):
+    payload = {k: v for k, v in patch.model_dump().items() if v is not None}
+    return update_trading_config(payload)
+
+
+@app.post("/api/trading/open-scan")
+def post_trading_open_scan(force_demo: bool = False):
+    return run_open_scan(force_demo=force_demo)
+
+
+@app.get("/api/trading/rules")
+def get_trading_rules():
+    return {"content": read_trading_rules()}
+
+
+@app.post("/api/trading/rules")
+def post_trading_rules(payload: TradingRulesUpdate):
+    if payload.content is not None:
+        return {"content": write_trading_rules(payload.content)}
+    if payload.note:
+        return {"content": append_rule_note(payload.note)}
+    raise HTTPException(status_code=400, detail="content 또는 note가 필요합니다.")
+
+
+@app.get("/api/trading/journal")
+def get_trading_journal(date: str | None = None):
+    return {
+        "date": date,
+        "dates": list_trading_journal_dates(),
+        "content": read_trading_journal(date),
+    }
+
+
+@app.post("/api/trading/reset-surge-scalping")
+def post_reset_surge_scalping():
+    return reset_trading_for_surge_scalping()
 
 
 _market_cache: dict = {"data": None, "ts": 0.0}
@@ -1101,6 +1509,8 @@ SECTOR_ETFS = [
     {"sector": "금(Gold)",   "etf": "KODEX 골드선물H",      "code": "132030"},
     {"sector": "AI/소프트웨어", "etf": "TIGER AI코리아",   "code": "364980"},
     {"sector": "전력/에너지", "etf": "TIGER 전력&에너지",   "code": "381180"},
+    {"sector": "로봇",       "etf": "KODEX 로봇액티브",     "code": "445290"},
+    {"sector": "광통신",     "etf": "KODEX 미국AI광통신네트워크", "code": "0173Y0"},
 ]
 
 _trend_cache: dict = {"data": None, "ts": 0.0}

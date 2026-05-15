@@ -22,3 +22,49 @@ export async function apiJson<T>(path: string, timeoutMs = 10000): Promise<T> {
     window.clearTimeout(timer)
   }
 }
+
+export async function apiPostJson<T>(path: string, body?: unknown, timeoutMs = 10000): Promise<T> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(`${apiBase()}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error(`API ${res.status}: ${path}`)
+    return await res.json()
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`API timeout: ${path}`)
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+export async function apiPatchJson<T>(path: string, body?: unknown, timeoutMs = 10000): Promise<T> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(`${apiBase()}${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!res.ok) throw new Error(`API ${res.status}: ${path}`)
+    return await res.json()
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`API timeout: ${path}`)
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "owner_name": "김지원",
+  "baseline_principal_krw": 9378327,
+  "usd_to_krw_rate": 1400,
+  "cash_flows": [],
+  "sections": [
+    {
+      "name": "미국주식",
+      "stocks": [
+        {
+          "name": "게임스탑",
+          "realized": false
+        },
+        {
+          "name": "ARKK",
+          "realized": false
+        },
+        {
+          "name": "INVESCO S&P500 고배당 저변동 ETF",
+          "realized": false
+        },
+        {
+          "name": "프로셰어즈 QQQ 2배 ETF",
+          "realized": false
+        },
+        {
+          "name": "TQQQ",
+          "realized": false
+        }
+      ],
+      "rows": {
+        "1월": {},
+        "2월": {
+          "게임스탑": 189
+        },
+        "3월": {},
+        "4월": {
+          "ARKK": -118
+        },
+        "5월": {},
+        "6월": {},
+        "7월": {},
+        "8월": {},
+        "9월": {
+          "INVESCO S&P500 고배당 저변동 ETF": 10
+        },
+        "10월": {
+          "프로셰어즈 QQQ 2배 ETF": 18,
+          "TQQQ": 37
+        },
+        "11월": {},
+        "12월": {
+          "TQQQ": 52
+        }
+      }
+    },
+    {
+      "name": "국내주식",
+      "stocks": [
+        {
+          "name": "한국금융지주",
+          "realized": false
+        },
+        {
+          "name": "코스맥스",
+          "realized": false
+        },
+        {
+          "name": "TIGER 소프트웨어",
+          "realized": false
+        },
+        {
+          "name": "아모레퍼시픽우",
+          "realized": false
+        },
+        {
+          "name": "LG디스플레이",
+          "realized": false
+        },
+        {
+          "name": "대한항공",
+          "realized": false
+        },
+        {
+          "name": "카카오",
+          "realized": false
+        },
+        {
+          "name": "KT나스미디어",
+          "realized": false
+        },
+        {
+          "name": "제일기획",
+          "realized": false
+        },
+        {
+          "name": "강원랜드",
+          "realized": false
+        },
+        {
+          "name": "신한지주",
+          "realized": false
+        },
+        {
+          "name": "SKC",
+          "realized": false
+        },
+        {
+          "name": "엘앤에프",
+          "realized": false
+        },
+        {
+          "name": "네패스",
+          "realized": false
+        },
+        {
+          "name": "파트론",
+          "realized": false
+        },
+        {
+          "name": "AP시스템",
+          "realized": false
+        },
+        {
+          "name": "두산퓨얼셀",
+          "realized": false
+        },
+        {
+          "name": "삼성카드",
+          "realized": false
+        },
+        {
+          "name": "컴투스",
+          "realized": false
+        }
+      ],
+      "rows": {
+        "1월": {},
+        "2월": {
+          "한국금융지주": 22164,
+          "코스맥스": 15474
+        },
+        "3월": {},
+        "4월": {
+          "TIGER 소프트웨어": 240,
+          "한국금융지주": 65639
+        },
+        "5월": {
+          "아모레퍼시픽우": 4598,
+          "코스맥스": 3718,
+          "LG디스플레이": 346,
+          "대한항공": 2983,
+          "카카오": 15622,
+          "KT나스미디어": 857
+        },
+        "6월": {
+          "제일기획": 993,
+          "강원랜드": 2184,
+          "신한지주": 1402,
+          "SKC": 18036,
+          "엘앤에프": 18327
+        },
+        "7월": {
+          "네패스": 16406,
+          "엘앤에프": 9521,
+          "파트론": -573,
+          "AP시스템": -1227
+        },
+        "8월": {
+          "두산퓨얼셀": 14969,
+          "강원랜드": 8965
+        },
+        "9월": {
+          "삼성카드": 1160
+        },
+        "10월": {
+          "컴투스": 6454
+        },
+        "11월": {},
+        "12월": {}
+      }
+    }
+  ]
+}

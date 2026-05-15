@@ -4,8 +4,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts'
 import { Card, KpiCard, SectionHeader, Divider } from '../components/Card'
-import { fmtKrw, fmtAmount, colorClass, MONTHS } from '../lib/utils'
-import { apiJson } from '../lib/api'
+import { fmtKrw, colorClass, MONTHS } from '../lib/utils'
+import { apiJson, apiPostJson } from '../lib/api'
 import { TrendingUp, TrendingDown, Clock, Target, Zap, AlertCircle, Lightbulb, Shield, BarChart3, Scale } from 'lucide-react'
 
 interface AnnualRow {
@@ -16,12 +16,6 @@ interface SymbolRow { 종목명: string; 실현손익: number }
 interface SymbolCount { 종목명: string; 매도횟수: number }
 interface SymbolTrade { 종목명: string; 거래횟수: number }
 interface Style { label: string; avg_hold_days: number; traits: string[] }
-interface ManualStockTotal { name: string; total: number; realized: boolean }
-interface ManualSection {
-  name: string; currency: string; total: number; total_krw: number
-  monthly: { month: string; profit: number; cumulative: number }[]
-  stock_totals: ManualStockTotal[]
-}
 interface AnalyticsData {
   annual: AnnualRow[]
   symbol_profit: SymbolRow[]
@@ -31,7 +25,6 @@ interface AnalyticsData {
   buy_count: number; sell_count: number
   usd_trade_count: number; krw_trade_count: number
   style: Style; tips: string[]
-  manual_sections: ManualSection[]
 }
 
 interface NarrativeBlock { heading: string; body: string }
@@ -131,6 +124,7 @@ export default function Analytics({ refreshKey = 0 }: Props) {
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [selectedYear, setSelectedYear] = useState<number | null>(null)
   const [justUpdated, setJustUpdated] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [retryCount, setRetryCount] = useState(0)
 
@@ -189,6 +183,20 @@ export default function Analytics({ refreshKey = 0 }: Props) {
   const top10Profit = data.symbol_profit.slice(0, 10)
   const top10Count = data.symbol_count.slice(0, 10)
 
+  const refreshCurrentYear = async () => {
+    try {
+      setRefreshing(true)
+      await apiPostJson('/api/analytics/refresh')
+      setRetryCount(c => c + 1)
+      setJustUpdated(true)
+      setTimeout(() => setJustUpdated(false), 2500)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '최신화 실패')
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* 업데이트 토스트 */}
@@ -199,9 +207,19 @@ export default function Analytics({ refreshKey = 0 }: Props) {
         </div>
       </div>
 
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">분석</h1>
-        <p className="text-sm text-slate-400 mt-1">종합거래내역 기반 매매 패턴 분석</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">분석</h1>
+          <p className="text-sm text-slate-400 mt-1">연도별 JSON 기반 매매 패턴 분석</p>
+        </div>
+        <button
+          type="button"
+          onClick={refreshCurrentYear}
+          disabled={refreshing}
+          className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {refreshing ? '최신화 중' : '최신화'}
+        </button>
       </div>
 
       {/* 내러티브 요약 — 블록형 */}
@@ -415,73 +433,6 @@ export default function Analytics({ refreshKey = 0 }: Props) {
       </div>
 
       {/* 수동 입력 현황 — 매매 입력과 연동 */}
-      {data.manual_sections.length > 0 && (
-        <>
-          <Divider />
-          <SectionHeader
-            title="수동 입력 현황"
-            sub="매매 입력 페이지에서 직접 기록한 데이터 · 입력할 때마다 자동 업데이트"
-          />
-          <div className="grid grid-cols-2 gap-4">
-            {data.manual_sections.map(section => {
-              const hasData = section.stock_totals.length > 0
-              const maxAbs = hasData ? Math.max(...section.stock_totals.map(s => Math.abs(s.total)), 1) : 1
-              return (
-                <Card key={section.name} className="overflow-hidden">
-                  <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-bold text-slate-700">{section.name}</p>
-                      <p className={`text-xs mt-0.5 font-semibold ${section.total >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                        총 {fmtAmount(section.total, section.currency)}
-                      </p>
-                    </div>
-                    <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full">
-                      {section.currency}
-                    </span>
-                  </div>
-                  {hasData ? (
-                    <div className="divide-y divide-slate-50">
-                      {section.stock_totals.map(s => (
-                        <div key={s.name} className="flex items-center gap-3 px-5 py-2.5 hover:bg-slate-50">
-                          <span className="text-sm text-slate-700 flex-1 truncate min-w-0" title={s.name}>
-                            {s.name}{s.realized ? <span className="text-blue-400 text-xs ml-1">실현</span> : ''}
-                          </span>
-                          <div className="w-16 bg-slate-100 rounded-full h-1.5 shrink-0">
-                            <div className="h-1.5 rounded-full"
-                              style={{ width: `${Math.abs(s.total) / maxAbs * 100}%`, background: s.total >= 0 ? '#ef4444' : '#3b82f6' }} />
-                          </div>
-                          <span className={`text-xs font-semibold w-24 text-right shrink-0 ${s.total >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                            {fmtAmount(s.total, section.currency)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-5 py-6 text-sm text-slate-400 text-center">
-                      아직 입력된 수익이 없습니다
-                    </div>
-                  )}
-                  {/* 월별 미니 바 */}
-                  <div className="px-5 py-3 border-t border-slate-50 flex items-end gap-1 h-14">
-                    {section.monthly.map(m => {
-                      const monthMax = Math.max(...section.monthly.map(x => Math.abs(x.profit)), 1)
-                      const h = Math.round(Math.abs(m.profit) / monthMax * 32)
-                      return (
-                        <div key={m.month} className="flex-1 flex flex-col items-center justify-end" title={`${m.month}: ${fmtAmount(m.profit, section.currency)}`}>
-                          {m.profit !== 0 && (
-                            <div className="w-full rounded-sm" style={{ height: h, background: m.profit >= 0 ? '#fca5a5' : '#93c5fd' }} />
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </Card>
-              )
-            })}
-          </div>
-        </>
-      )}
-
       {/* 개선 팁 */}
       <Divider />
       <SectionHeader title="수익률을 올리기 위해 해볼 것" sub="데이터 기반 맞춤 조언" />
