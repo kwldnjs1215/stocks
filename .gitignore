@@ -2,6 +2,7 @@
 .env
 .env.company
 .env.home
+.kis_token.json
 
 # Python
 .venv/

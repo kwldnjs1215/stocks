@@ -8,7 +8,7 @@
       "name": "미국주식",
       "stocks": [
         {
-          "name": "tqqq",
+          "name": "TQQQ",
           "realized": false
         },
         {
@@ -28,180 +28,199 @@
           "realized": false
         },
         {
-          "name": "spym",
+          "name": "SPYM",
           "realized": false
         },
         {
-          "name": "soxl",
+          "name": "SOXL",
           "realized": false
         },
         {
-          "name": "inox",
+          "name": "INOX",
           "realized": false
         },
         {
-          "name": "upro",
+          "name": "UPRO",
           "realized": false
         },
         {
-          "name": "aaox",
-          "realized": true
+          "name": "AAOX",
+          "realized": false
         },
         {
           "name": "로켓랩",
-          "realized": true
+          "realized": false
         },
         {
           "name": "코닝",
-          "realized": true
+          "realized": false
         },
         {
           "name": "넥스트에라에너지",
+          "realized": false
+        },
+        {
+          "name": "LRCU",
+          "realized": false
+        },
+        {
+          "name": "RKLX",
+          "realized": true
+        },
+        {
+          "name": "TSLL",
           "realized": true
         }
       ],
       "rows": {
         "1월": {
-          "tqqq": 28,
+          "TQQQ": 28,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "2월": {
-          "tqqq": 51,
+          "TQQQ": 51,
           "엔비디아": 15,
           "샌디스크": 89,
           "도미노피자": 27,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "3월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 56,
           "도미노피자": 0,
           "SLV": 37,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "4월": {
-          "tqqq": 55,
+          "TQQQ": 55,
           "엔비디아": 0,
           "샌디스크": 237,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 41,
-          "soxl": 26,
-          "inox": 8,
-          "upro": 34,
-          "aaox": 9,
+          "SPYM": 41,
+          "SOXL": 26,
+          "INOX": 8,
+          "UPRO": 34,
+          "AAOX": 9,
           "로켓랩": 40
         },
         "5월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "6월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "7월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "8월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "9월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "10월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "11월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         },
         "12월": {
-          "tqqq": 0,
+          "TQQQ": 0,
           "엔비디아": 0,
           "샌디스크": 0,
           "도미노피자": 0,
           "SLV": 0,
-          "spym": 0,
-          "soxl": 0,
-          "inox": 0,
-          "upro": 0
+          "SPYM": 0,
+          "SOXL": 0,
+          "INOX": 0,
+          "UPRO": 0
         }
       },
       "rows_by_year": {
         "2026": {
           "4월": {
-            "샌디스크": 677.0,
-            "코닝": 23.0,
-            "넥스트에라에너지": 6.0
+            "샌디스크": 815,
+            "코닝": 23,
+            "넥스트에라에너지": 6,
+            "AAOX": 5
+          },
+          "5월": {
+            "LRCU": -21,
+            "샌디스크": 1781.0,
+            "RKLX": 83.0,
+            "TSLL": 13.0
           }
         }
       }
@@ -279,7 +298,7 @@
         },
         {
           "name": "고영",
-          "realized": true
+          "realized": false
         },
         {
           "name": "펄어비스",
@@ -287,10 +306,22 @@
         },
         {
           "name": "현대차",
-          "realized": true
+          "realized": false
         },
         {
           "name": "로봇ETF",
+          "realized": false
+        },
+        {
+          "name": "PLUS K방산",
+          "realized": true
+        },
+        {
+          "name": "ACE KRX금현물",
+          "realized": true
+        },
+        {
+          "name": "한국전력",
           "realized": true
         }
       ],
@@ -529,9 +560,15 @@
       "rows_by_year": {
         "2026": {
           "4월": {
-            "현대차": 14603.0,
-            "로봇ETF": 66435.0,
-            "삼성전자": 40608.0
+            "현대차": 14603,
+            "로봇ETF": 66435,
+            "삼성전자": 40608
+          },
+          "5월": {
+            "PLUS K방산": -22650.0,
+            "ACE KRX금현물": -24299.0,
+            "한국전력": -471079.0,
+            "두산에너빌리티": 223053.0
           }
         }
       }
