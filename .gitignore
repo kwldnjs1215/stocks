@@ -33,6 +33,10 @@ data/*.xlsx
 .vscode/
 *.iml
 
+# Logs
+*.err.log
+*.out.log
+
 # OS
 .DS_Store
 Thumbs.db
