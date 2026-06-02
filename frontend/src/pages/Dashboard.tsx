@@ -36,6 +36,7 @@ interface Props { refreshKey?: number }
 export default function Dashboard({ refreshKey = 0 }: Props) {
   const [data, setData] = useState<DashboardData | null>(null)
   const [selectedPerformanceYear, setSelectedPerformanceYear] = useState<number | null>(null)
+  const [detailMonth, setDetailMonth] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -227,53 +228,62 @@ export default function Dashboard({ refreshKey = 0 }: Props) {
               </Card>
             </div>
 
-            {/* 월별 상세 테이블 */}
-            <details className="mt-3">
-              <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600 select-none">
-                월별 상세 내역 보기 ({yearLabel})
-              </summary>
-              <Card className="mt-2 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-100">
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400">월</th>
-                      {section.stocks.map(s => (
-                        <th key={s.name} className="text-right px-4 py-3 text-xs font-semibold text-slate-400">
-                          {s.name}{s.realized ? '+' : ''}
-                        </th>
+            {/* 월별 상세 내역 — 월별로 묶어서 읽기 쉽게 */}
+            {(() => {
+              const monthBlocks = MONTHS.map((mon, idx) => {
+                const row = monthly[idx]
+                const stockRow = (stocksMonthly.find(r => r.month === mon) || {}) as Record<string, number | string>
+                const prevRow = (idx > 0 ? stocksMonthly.find(r => r.month === MONTHS[idx - 1]) : null) as Record<string, number | string> | null
+                const items = section.stocks
+                  .map(s => {
+                    const prev = prevRow ? (Number(prevRow[s.name]) || 0) : 0
+                    const val = (Number(stockRow[s.name]) || 0) - prev
+                    return { name: s.name, val }
+                  })
+                  .filter(e => e.val !== 0)
+                return { mon, profit: row?.profit ?? 0, items }
+              }).filter(b => b.items.length > 0)
+
+              if (monthBlocks.length === 0) return null
+
+              const selectedMon = detailMonth[section.name]
+              const active = monthBlocks.find(b => b.mon === selectedMon) ?? monthBlocks[monthBlocks.length - 1]
+
+              return (
+                <Card className="mt-3 p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      월별 상세 내역 ({yearLabel})
+                    </p>
+                    <select
+                      value={active.mon}
+                      onChange={e => setDetailMonth(prev => ({ ...prev, [section.name]: e.target.value }))}
+                      className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-white text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
+                    >
+                      {monthBlocks.map(b => (
+                        <option key={b.mon} value={b.mon}>{b.mon}</option>
                       ))}
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400">합계</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {MONTHS.map((mon, idx) => {
-                      const row = monthly[idx]
-                      if (!row) return null
-                      // 해당 월의 종목별 값: monthly에는 profit만 있으므로 rows_by_year에서 직접 읽음
-                      return (
-                        <tr key={mon} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-2.5 text-slate-600 font-medium">{mon}</td>
-                          {section.stocks.map(s => {
-                            const stockRow = (stocksMonthly.find(r => r.month === mon) || {}) as Record<string, number | string>
-                            const prevRow = (idx > 0 ? stocksMonthly.find(r => r.month === MONTHS[idx - 1]) : null) as Record<string, number | string> | null
-                            const prev = prevRow ? (prevRow[s.name] as number || 0) : 0
-                            const val = (stockRow[s.name] as number || 0) - prev
-                            return (
-                              <td key={s.name} className={`px-4 py-2.5 text-right ${colorClass(val)}`}>
-                                {val !== 0 ? fmtAmount(val, section.currency) : '—'}
-                              </td>
-                            )
-                          })}
-                          <td className={`px-4 py-2.5 text-right font-semibold ${colorClass(row.profit)}`}>
-                            {row.profit !== 0 ? fmtAmount(row.profit, section.currency) : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </Card>
-            </details>
+                    </select>
+                  </div>
+                  <div className="flex items-baseline justify-between mb-2.5 pb-2 border-b border-slate-100">
+                    <span className="text-sm font-bold text-slate-700">{active.mon} 합계</span>
+                    <span className={`text-sm font-semibold ${colorClass(active.profit)}`}>
+                      {fmtAmount(active.profit, section.currency)}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {active.items.map(item => (
+                      <div key={item.name} className="flex items-center justify-between text-sm">
+                        <span className="text-slate-500 truncate pr-2">{item.name}</span>
+                        <span className={`font-medium shrink-0 ${colorClass(item.val)}`}>
+                          {fmtAmount(item.val, section.currency)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )
+            })()}
           </div>
         )
       })}

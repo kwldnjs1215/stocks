@@ -1246,6 +1246,38 @@ def add_trade(body: TradeInput):
     month_rows[body.stock_name] = month_rows.get(body.stock_name, 0) + body.amount
 
     save_data(raw)
+    sync_current_year_portfolio_file()  # 분석 페이지 자동 최신화
+    return {"ok": True}
+
+
+class TradeEdit(BaseModel):
+    section_name: str
+    month: str
+    stock_name: str
+    amount: float   # 기존 값을 이 값으로 덮어씀. 0이면 항목 삭제
+    year: int = datetime.now().year
+
+
+@app.put("/api/trades")
+def set_trade(body: TradeEdit):
+    """잘못 입력한 실현손익을 정정/삭제한다 (누적이 아니라 덮어쓰기)."""
+    raw = load_json_data()
+    sections = raw.get("sections", [])
+    section = next((s for s in sections if s["name"] == body.section_name), None)
+    if not section:
+        raise HTTPException(status_code=404, detail="섹션을 찾을 수 없습니다.")
+
+    rows_by_year = section.setdefault("rows_by_year", {})
+    year_rows = rows_by_year.setdefault(str(body.year), {})
+    month_rows = year_rows.setdefault(body.month, {})
+
+    if body.amount == 0:
+        month_rows.pop(body.stock_name, None)
+    else:
+        month_rows[body.stock_name] = body.amount
+
+    save_data(raw)
+    sync_current_year_portfolio_file()  # 분석 페이지 자동 최신화
     return {"ok": True}
 
 
