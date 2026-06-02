@@ -11,18 +11,19 @@
 ## 실행 방법
 
 ### 한번에 실행 (권장)
-```
-start.bat 더블클릭
-```
-
-### 수동 실행
 ```bash
-# 백엔드 (포트 8001)
-.venv/Scripts/python.exe -m uvicorn api:app --host 0.0.0.0 --port 8001
-
-# 프론트엔드 (포트 5176)
-cd frontend && npm run dev
+npm run dev
 ```
+백엔드(8001, uvicorn `--reload`) + 프론트엔드(5176, vite)를 `concurrently`로 한 터미널에서 동시 기동. Ctrl+C로 둘 다 종료.
+
+### 별도 실행
+```bash
+npm run dev:backend   # 백엔드만
+npm run dev:frontend  # 프론트엔드만
+```
+
+### 레거시
+`start.bat`도 그대로 유지(별도 cmd 창으로 띄우고 브라우저 자동 실행).
 
 ## 탭 구성
 

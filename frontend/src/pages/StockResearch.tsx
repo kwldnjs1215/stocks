@@ -38,20 +38,80 @@ interface Analysis {
   options: {
     available: boolean
     source?: string
+    scope?: string
     expiry?: string
     call_volume?: number
     put_volume?: number
     put_call_volume_ratio?: number | null
+    call_open_interest?: number
+    put_open_interest?: number
+    put_call_oi_ratio?: number | null
     max_pain?: number
     spot_vs_max_pain_pct?: number | null
+    atm_strike?: number | null
+    atm_iv?: number | null
     message?: string
   }
   peers: Array<{ symbol: string; price: number; change_5d: number }>
-  company: { sector?: string; industry?: string; summary?: string; earnings_dates?: string[] }
-  news: Array<{ title: string; url: string; date: string }>
-  events: { past: string[]; future: string[] }
+  company: {
+    name?: string
+    sector?: string
+    industry?: string
+    summary?: string
+    earnings_dates?: string[]
+    market_cap?: number | null
+    trailing_pe?: number | null
+    forward_pe?: number | null
+    dividend_yield?: number | null
+  }
+  news: {
+    direct: NewsItem[]
+    sector: Array<NewsItem & { keyword?: string }>
+    peers: Array<NewsItem & { peer?: string }>
+    keywords: string[]
+  }
+  market_news: {
+    us: NewsItem[]
+    kr: NewsItem[]
+  }
+  events: {
+    earnings: {
+      available: boolean
+      source?: string
+      past?: EarningsPast[]
+      future_estimates?: EarningsFuture[]
+      upcoming_dates?: string[]
+      message?: string
+    }
+  }
   llm_strategy: { available: boolean; source?: string; text?: string; message?: string }
   notes: string[]
+}
+
+interface NewsItem {
+  title: string
+  url: string
+  date: string
+  source?: string
+}
+
+interface EarningsPast {
+  quarter: string
+  eps_estimate: number | null
+  eps_actual: number | null
+  surprise_pct: number | null
+}
+
+interface EarningsFuture {
+  period: string
+  label: string
+  eps_avg: number | null
+  eps_low: number | null
+  eps_high: number | null
+  revenue_avg: number | null
+  revenue_low?: number | null
+  revenue_high?: number | null
+  analysts?: number | null
 }
 
 interface ChatMsg {
@@ -82,6 +142,41 @@ function MiniMetric({ label, value, sub, tone = 'slate' }: { label: string; valu
       <p className={`inline-block mt-1 text-xl font-bold px-2 py-0.5 rounded ${toneClass}`}>{value}</p>
       {sub && <p className="text-xs text-slate-400 mt-2 leading-relaxed">{sub}</p>}
     </Card>
+  )
+}
+
+function NewsItemRow({ item, showKeyword, showPeer }: { item: NewsItem & { keyword?: string; peer?: string }; showKeyword?: boolean; showPeer?: boolean }) {
+  return (
+    <a href={item.url} target="_blank" rel="noreferrer" className="block group border-b border-slate-50 last:border-0 pb-2 last:pb-0">
+      <p className="text-xs text-slate-700 group-hover:text-blue-600 leading-snug line-clamp-2">{item.title}</p>
+      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400">
+        {showKeyword && item.keyword && <span className="px-1.5 py-0.5 rounded bg-violet-50 text-violet-600 font-semibold">{item.keyword}</span>}
+        {showPeer && item.peer && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-semibold">{item.peer}</span>}
+        {item.source && <span className="truncate max-w-[120px]">{item.source}</span>}
+      </div>
+    </a>
+  )
+}
+
+function NewsColumn({ title, items, emptyMsg, showKeyword, showPeer }: { title: string; items: Array<NewsItem & { keyword?: string; peer?: string }>; emptyMsg: string; showKeyword?: boolean; showPeer?: boolean }) {
+  return (
+    <div className="space-y-2.5">
+      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{title}</p>
+      {items?.length ? (
+        items.slice(0, 8).map((n, i) => <NewsItemRow key={`${n.url}-${i}`} item={n} showKeyword={showKeyword} showPeer={showPeer} />)
+      ) : (
+        <p className="text-xs text-slate-400">{emptyMsg}</p>
+      )}
+    </div>
+  )
+}
+
+function NewsList({ items, emptyMsg }: { items: NewsItem[]; emptyMsg: string }) {
+  if (!items?.length) return <p className="text-xs text-slate-400">{emptyMsg}</p>
+  return (
+    <div className="space-y-2.5">
+      {items.slice(0, 6).map((n, i) => <NewsItemRow key={`${n.url}-${i}`} item={n} />)}
+    </div>
   )
 }
 
@@ -288,13 +383,27 @@ export default function StockResearch() {
 
           <div className="grid grid-cols-3 gap-4">
             <Card className="p-5">
-              <SectionHeader title="옵션 분석" sub={analysis.options.available ? `${analysis.options.expiry} 만기` : undefined} />
+              <SectionHeader
+                title="옵션 분석"
+                sub={analysis.options.available
+                  ? `${analysis.options.scope || ''}${analysis.options.scope ? ' · ' : ''}${analysis.options.expiry} 만기`
+                  : undefined}
+              />
               {analysis.options.available ? (
-                <div className="space-y-3 text-sm">
+                <div className="space-y-2.5 text-sm">
                   <div className="flex justify-between"><span className="text-slate-400">콜 거래량</span><b>{fmtNum(analysis.options.call_volume)}</b></div>
                   <div className="flex justify-between"><span className="text-slate-400">풋 거래량</span><b>{fmtNum(analysis.options.put_volume)}</b></div>
-                  <div className="flex justify-between"><span className="text-slate-400">P/C Ratio</span><b>{fmtNum(analysis.options.put_call_volume_ratio)}</b></div>
+                  <div className="flex justify-between"><span className="text-slate-400">P/C 거래량</span><b>{fmtNum(analysis.options.put_call_volume_ratio)}</b></div>
+                  {analysis.options.put_call_oi_ratio !== undefined && analysis.options.put_call_oi_ratio !== null && (
+                    <div className="flex justify-between"><span className="text-slate-400">P/C 미결제</span><b>{fmtNum(analysis.options.put_call_oi_ratio)}</b></div>
+                  )}
                   <div className="flex justify-between"><span className="text-slate-400">맥스페인</span><b>{fmtNum(analysis.options.max_pain)}</b></div>
+                  {analysis.options.atm_strike !== undefined && analysis.options.atm_strike !== null && (
+                    <div className="flex justify-between"><span className="text-slate-400">ATM 행사가</span><b>{fmtNum(analysis.options.atm_strike)}</b></div>
+                  )}
+                  {analysis.options.atm_iv !== undefined && analysis.options.atm_iv !== null && (
+                    <div className="flex justify-between"><span className="text-slate-400">ATM IV</span><b>{fmtNum(analysis.options.atm_iv)}%</b></div>
+                  )}
                 </div>
               ) : <p className="text-sm text-slate-400">{analysis.options.message}</p>}
             </Card>
@@ -303,32 +412,88 @@ export default function StockResearch() {
               {analysis.peers.length ? analysis.peers.map(peer => <PeerRow key={peer.symbol} peer={peer} />) : <p className="text-sm text-slate-400">관련주 데이터 없음</p>}
             </Card>
             <Card className="p-5">
-              <SectionHeader title="이벤트" sub={analysis.company.industry || analysis.company.sector} />
-              <div className="space-y-3">
-                <div>
-                  <p className="text-xs font-semibold text-slate-400 mb-1">과거</p>
-                  {analysis.events.past.map(x => <p key={x} className="text-xs text-slate-600 leading-relaxed">· {x}</p>)}
+              <SectionHeader title="실적 / 이벤트" sub={analysis.company.industry || analysis.company.sector} />
+              {analysis.events?.earnings?.available ? (
+                <div className="space-y-3">
+                  {(analysis.events.earnings.past?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold text-slate-400 mb-1.5">과거 분기 (예상 vs 실제 EPS)</p>
+                      <div className="space-y-1">
+                        {analysis.events.earnings.past!.slice(-4).map(p => {
+                          const beat = (p.surprise_pct ?? 0) > 0
+                          return (
+                            <div key={p.quarter} className="flex items-center justify-between text-xs">
+                              <span className="text-slate-500">{p.quarter}</span>
+                              <span className="text-slate-600">
+                                {fmtNum(p.eps_estimate)} → <b>{fmtNum(p.eps_actual)}</b>
+                                {p.surprise_pct !== null && (
+                                  <span className={`ml-1.5 font-semibold ${beat ? 'text-red-500' : 'text-blue-500'}`}>
+                                    ({beat ? '+' : ''}{p.surprise_pct?.toFixed(1)}%)
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {(analysis.events.earnings.future_estimates?.length ?? 0) > 0 && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-[11px] font-semibold text-slate-400 mb-1.5">다음 컨센서스</p>
+                      {analysis.events.earnings.future_estimates!.map(f => (
+                        <div key={f.period} className="text-xs space-y-0.5">
+                          <p className="text-slate-500">{f.label}</p>
+                          <p className="text-slate-700">
+                            EPS <b>{fmtNum(f.eps_avg)}</b>
+                            {f.eps_low !== null && f.eps_high !== null && (
+                              <span className="text-slate-400"> ({fmtNum(f.eps_low)}~{fmtNum(f.eps_high)})</span>
+                            )}
+                          </p>
+                          {f.revenue_avg && (
+                            <p className="text-slate-600">매출 <b>{(f.revenue_avg / 1e9).toFixed(2)}B</b></p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {(analysis.events.earnings.upcoming_dates?.length ?? 0) > 0 && (
+                    <div className="border-t border-slate-100 pt-3">
+                      <p className="text-[11px] font-semibold text-slate-400 mb-1">다음 실적일</p>
+                      {analysis.events.earnings.upcoming_dates!.map(d => (
+                        <p key={d} className="text-xs font-semibold text-violet-600">{d}</p>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <p className="text-xs font-semibold text-slate-400 mb-1">미래</p>
-                  {analysis.events.future.map(x => <p key={x} className="text-xs text-slate-600 leading-relaxed">· {x}</p>)}
-                </div>
-              </div>
+              ) : (
+                <p className="text-xs text-slate-400 leading-relaxed">{analysis.events?.earnings?.message || '실적 데이터를 가져오지 못했습니다.'}</p>
+              )}
             </Card>
           </div>
 
           <Card className="p-5">
-            <SectionHeader title="관련 뉴스/호재·악재 단서" sub="최근 헤드라인 기반" />
-            {analysis.news.length ? (
-              <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                {analysis.news.map(n => (
-                  <a key={n.url || n.title} href={n.url} target="_blank" rel="noreferrer" className="text-sm text-slate-600 hover:text-blue-600 border-b border-slate-50 pb-2">
-                    {n.title}
-                  </a>
-                ))}
-              </div>
-            ) : <p className="text-sm text-slate-400">뉴스 데이터를 가져오지 못했습니다.</p>}
+            <SectionHeader
+              title="관련 뉴스 — 직접/섹터/관련주"
+              sub={analysis.news?.keywords?.length ? `섹터 키워드: ${analysis.news.keywords.slice(0, 4).join(', ')}` : '최근 헤드라인'}
+            />
+            <div className="grid grid-cols-3 gap-5">
+              <NewsColumn title="종목 뉴스" items={analysis.news?.direct ?? []} emptyMsg="직접 뉴스 없음" />
+              <NewsColumn title="섹터/시장 동향" items={analysis.news?.sector ?? []} emptyMsg="섹터 뉴스 없음" showKeyword />
+              <NewsColumn title="관련주 뉴스" items={analysis.news?.peers ?? []} emptyMsg="관련주 뉴스 없음" showPeer />
+            </div>
           </Card>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Card className="p-5">
+              <SectionHeader title="미국 시황" sub="S&P 500 · Nasdaq" />
+              <NewsList items={analysis.market_news?.us ?? []} emptyMsg="미국 시황 뉴스 없음" />
+            </Card>
+            <Card className="p-5">
+              <SectionHeader title="국내 시황" sub="코스피 · 코스닥" />
+              <NewsList items={analysis.market_news?.kr ?? []} emptyMsg="국내 시황 뉴스 없음" />
+            </Card>
+          </div>
 
           <Card className="p-5">
             <SectionHeader title="Claude 전략 메모" sub={analysis.llm_strategy.available ? analysis.llm_strategy.source : 'API 키 필요'} />

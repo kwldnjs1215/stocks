@@ -25,7 +25,7 @@ for %%P in (8001 5176 5177 5178) do (
 timeout /t 1 /nobreak >nul
 
 echo  Starting backend...
-start "stocks backend" cmd /k "cd /d "%ROOT%" && .venv\Scripts\python.exe -m uvicorn api:app --host 0.0.0.0 --port %BACKEND_PORT%"
+start "stocks backend" cmd /k "cd /d "%ROOT%" && set BACKEND_PORT=%BACKEND_PORT%&& .venv\Scripts\python.exe run_backend.py"
 
 timeout /t 2 /nobreak >nul
 

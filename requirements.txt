@@ -3,3 +3,6 @@ pandas>=2.2
 requests>=2.31
 beautifulsoup4>=4.12
 python-dotenv>=1.0
+watchfiles>=0.21
+yfinance>=0.2
+

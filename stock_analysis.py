@@ -5,6 +5,7 @@ import os
 import json
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,22 +18,18 @@ try:
 except Exception:  # pragma: no cover - optional runtime dependency
     fdr = None
 
+try:
+    import yfinance as yf
+except Exception:  # pragma: no cover - optional runtime dependency
+    yf = None
+
 
 NAME_TO_SYMBOL = {
     "샌디스크": "SNDK",
-    "sandisk": "SNDK",
-    "sndk": "SNDK",
     "엔비디아": "NVDA",
-    "nvidia": "NVDA",
     "마이크론": "MU",
-    "micron": "MU",
     "웨스턴디지털": "WDC",
-    "western digital": "WDC",
     "시게이트": "STX",
-    "seagate": "STX",
-    "삼성전자": "005930",
-    "sk하이닉스": "000660",
-    "하이닉스": "000660",
 }
 
 PEER_MAP = {
@@ -90,10 +87,39 @@ def _env_value(name: str) -> str:
     return ""
 
 
+_KR_NAME_INDEX: dict[str, str] | None = None
+
+
+def _kr_name_index() -> dict[str, str]:
+    global _KR_NAME_INDEX
+    if _KR_NAME_INDEX is not None:
+        return _KR_NAME_INDEX
+    if fdr is None:
+        _KR_NAME_INDEX = {}
+        return _KR_NAME_INDEX
+    try:
+        df = fdr.StockListing("KRX")
+        index: dict[str, str] = {}
+        for code, name in zip(df["Code"], df["Name"]):
+            if not isinstance(code, str) or not isinstance(name, str):
+                continue
+            key = name.lower().replace(" ", "")
+            if key and key not in index:
+                index[key] = code
+        _KR_NAME_INDEX = index
+    except Exception:
+        _KR_NAME_INDEX = {}
+    return _KR_NAME_INDEX
+
+
 def resolve_symbol(query: str) -> dict[str, str]:
     raw = query.strip()
     key = raw.lower().replace(" ", "")
-    symbol = NAME_TO_SYMBOL.get(raw.lower()) or NAME_TO_SYMBOL.get(key) or raw.upper()
+    symbol = NAME_TO_SYMBOL.get(raw.lower()) or NAME_TO_SYMBOL.get(key)
+    if not symbol:
+        symbol = _kr_name_index().get(key)
+    if not symbol:
+        symbol = raw.upper()
     market = "KR" if re.fullmatch(r"\d{6}", symbol) else "US"
     exchange = "NAS"
     if market == "US" and symbol in {"WDC", "STX"}:
@@ -290,10 +316,115 @@ def _kis_daily(resolved: dict[str, str]) -> list[dict[str, Any]]:
         return []
 
 
+def _kis_intraday_1m_kr(resolved: dict[str, str], max_batches: int = 3) -> list[dict[str, Any]]:
+    """KIS 국내 1분봉. 한 호출당 30개 → 페이지네이션으로 max_batches*30개."""
+    client = _kis_client()
+    if not client:
+        return []
+    now = datetime.now()
+    if 9 <= now.hour < 15 or (now.hour == 15 and now.minute <= 30):
+        cursor_time = now.strftime("%H%M%S")
+    else:
+        cursor_time = "153000"
+
+    all_bars: list[dict[str, Any]] = []
+    for _ in range(max_batches):
+        try:
+            data = client.get(
+                "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice",
+                "FHKST03010200",
+                {
+                    "FID_ETC_CLS_CODE": "",
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": resolved["symbol"],
+                    "FID_INPUT_HOUR_1": cursor_time,
+                    "FID_PW_DATA_INCU_YN": "Y",
+                },
+            )
+        except Exception:
+            break
+        rows = data.get("output2") or []
+        batch: list[dict[str, Any]] = []
+        for r in rows:
+            close = _num(r.get("stck_prpr"))
+            if close <= 0:
+                continue
+            batch.append({
+                "date": str(r.get("stck_bsop_date", "")),
+                "time": str(r.get("stck_cntg_hour", "")).zfill(6),
+                "open": _num(r.get("stck_oprc"), close),
+                "high": _num(r.get("stck_hgpr"), close),
+                "low": _num(r.get("stck_lwpr"), close),
+                "close": close,
+                "volume": _num(r.get("cntg_vol")),
+            })
+        if not batch:
+            break
+        all_bars.extend(batch)
+        earliest = min(b["time"] for b in batch)
+        try:
+            hh = int(earliest[:2])
+            mm = int(earliest[2:4])
+            mm -= 1
+            if mm < 0:
+                mm = 59
+                hh -= 1
+            if hh < 9:
+                break
+            cursor_time = f"{hh:02d}{mm:02d}00"
+        except Exception:
+            break
+
+    seen = set()
+    unique: list[dict[str, Any]] = []
+    for b in all_bars:
+        key = (b["date"], b["time"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(b)
+    return sorted(unique, key=lambda x: (x["date"], x["time"]))
+
+
+def _resample_to_5m(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """1분봉을 5분 단위로 OHLC 리샘플링."""
+    if not bars:
+        return []
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for b in bars:
+        t = b.get("time", "")
+        if len(t) < 4:
+            continue
+        try:
+            hh = int(t[:2])
+            mm = int(t[2:4])
+        except ValueError:
+            continue
+        bucket_min = (mm // 5) * 5
+        key = f"{b.get('date', '')}_{hh:02d}{bucket_min:02d}"
+        buckets.setdefault(key, []).append(b)
+    out: list[dict[str, Any]] = []
+    for key in sorted(buckets):
+        group = sorted(buckets[key], key=lambda x: x["time"])
+        date, hhmm = key.split("_", 1)
+        out.append({
+            "date": date,
+            "time": hhmm + "00",
+            "open": group[0]["open"],
+            "high": max(g["high"] for g in group),
+            "low": min(g["low"] for g in group),
+            "close": group[-1]["close"],
+            "volume": sum(g["volume"] for g in group),
+        })
+    return out
+
+
 def _kis_intraday_5m(resolved: dict[str, str]) -> list[dict[str, Any]]:
     client = _kis_client()
-    if not client or resolved["market"] != "US":
+    if not client:
         return []
+    if resolved["market"] == "KR":
+        return _resample_to_5m(_kis_intraday_1m_kr(resolved))
     try:
         data = client.get(
             "/uapi/overseas-price/v1/quotations/inquire-time-itemchartprice",
@@ -506,89 +637,419 @@ def _pressure(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _options(symbol: str, spot: float) -> dict[str, Any]:
-    if not symbol or re.fullmatch(r"\d{6}", symbol):
-        return {"available": False, "message": "국내 개별주 옵션 체인은 아직 연결하지 않았습니다."}
+def _next_kospi200_expiry_yyyymm() -> str:
+    """다음 KOSPI200 월간옵션 만기(둘째주 목요일) 기준의 YYYYMM."""
+    today = datetime.now().date()
+
+    def second_thursday(y: int, m: int):
+        for d in range(8, 15):
+            if datetime(y, m, d).weekday() == 3:
+                return datetime(y, m, d).date()
+        return None
+
+    exp = second_thursday(today.year, today.month)
+    if exp and today < exp:
+        return f"{today.year:04d}{today.month:02d}"
+    if today.month == 12:
+        return f"{today.year + 1:04d}01"
+    return f"{today.year:04d}{today.month + 1:02d}"
+
+
+def _kis_kospi200_options() -> dict[str, Any]:
+    """국내 종목 분석 시 시장 전반 분위기로 KOSPI200 옵션 체인 사용."""
+    client = _kis_client()
+    if not client:
+        return {"available": False, "message": "KIS API 키가 없어 KOSPI200 옵션을 가져오지 못했습니다."}
+
+    expiry = _next_kospi200_expiry_yyyymm()
     try:
-        base = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}"
-        meta = requests.get(base, timeout=8).json().get("optionChain", {}).get("result", [])
-        if not meta:
+        data = client.get(
+            "/uapi/domestic-futureoption/v1/quotations/display-board-callput",
+            "FHPIF05030100",
+            {
+                "FID_COND_MRKT_DIV_CODE": "O",
+                "FID_COND_SCR_DIV_CODE": "20503",
+                "FID_MRKT_CLS_CODE": "CO",
+                "FID_MTRT_CNT": expiry,
+                "FID_MRKT_CLS_CODE1": "PO",
+                "FID_COND_MRKT_CLS_CODE": "",
+            },
+        )
+    except Exception as e:
+        return {"available": False, "message": f"KOSPI200 옵션 조회 실패: {str(e)[:60]}"}
+
+    calls = data.get("output1") or []
+    puts = data.get("output2") or []
+    if not calls or not puts:
+        return {"available": False, "message": "KOSPI200 옵션 체인 응답이 비어있습니다."}
+
+    call_vol = sum(int(_num(r.get("acml_vol"))) for r in calls)
+    put_vol = sum(int(_num(r.get("acml_vol"))) for r in puts)
+    call_oi = sum(int(_num(r.get("hts_otst_stpl_qty"))) for r in calls)
+    put_oi = sum(int(_num(r.get("hts_otst_stpl_qty"))) for r in puts)
+
+    atm_row = next((r for r in calls if r.get("atm_cls_name") == "ATM"), None)
+    atm_strike = _num(atm_row.get("acpr")) if atm_row else 0
+    atm_iv = _num(atm_row.get("hts_ints_vltl")) if atm_row else 0
+
+    by_strike: dict[float, dict[str, float]] = {}
+    for r in calls:
+        k = _num(r.get("acpr"))
+        if k > 0:
+            by_strike.setdefault(k, {"call_oi": 0, "put_oi": 0})["call_oi"] = _num(r.get("hts_otst_stpl_qty"))
+    for r in puts:
+        k = _num(r.get("acpr"))
+        if k > 0:
+            by_strike.setdefault(k, {"call_oi": 0, "put_oi": 0})["put_oi"] = _num(r.get("hts_otst_stpl_qty"))
+
+    strikes = sorted(by_strike)
+    max_pain = None
+    min_pain = None
+    for k in strikes:
+        pain = 0.0
+        for s in strikes:
+            data_s = by_strike[s]
+            pain += max(0.0, k - s) * data_s["call_oi"]
+            pain += max(0.0, s - k) * data_s["put_oi"]
+        if min_pain is None or pain < min_pain:
+            min_pain = pain
+            max_pain = k
+
+    pcv = round(put_vol / call_vol, 2) if call_vol else None
+    return {
+        "available": True,
+        "source": "KIS KOSPI200 옵션",
+        "scope": "시장 전반 (KOSPI200 지수옵션)",
+        "expiry": f"{expiry[:4]}-{expiry[4:]}",
+        "call_volume": call_vol,
+        "put_volume": put_vol,
+        "put_call_volume_ratio": pcv,
+        "call_open_interest": call_oi,
+        "put_open_interest": put_oi,
+        "put_call_oi_ratio": round(put_oi / call_oi, 2) if call_oi else None,
+        "max_pain": max_pain,
+        "atm_strike": round(atm_strike, 2) if atm_strike else None,
+        "atm_iv": round(atm_iv, 2) if atm_iv else None,
+    }
+
+
+def _options(symbol: str, spot: float) -> dict[str, Any]:
+    if not symbol:
+        return {"available": False, "message": "심볼이 없어 옵션을 가져오지 못했습니다."}
+    if re.fullmatch(r"\d{6}", symbol):
+        return _kis_kospi200_options()
+    if yf is None:
+        return {"available": False, "message": "yfinance 패키지가 설치되지 않았습니다."}
+    try:
+        t = yf.Ticker(symbol)
+        expirations = t.options
+        if not expirations:
             return {"available": False, "message": "옵션 체인을 찾지 못했습니다."}
-        expiry = meta[0].get("expirationDates", [None])[0]
-        chain = requests.get(f"{base}?date={expiry}", timeout=8).json()["optionChain"]["result"][0]
-        options = chain.get("options", [{}])[0]
-        calls = options.get("calls", [])
-        puts = options.get("puts", [])
-        call_volume = int(sum(_num(o.get("volume")) for o in calls))
-        put_volume = int(sum(_num(o.get("volume")) for o in puts))
-        strikes = sorted({round(_num(o.get("strike")), 2) for o in calls + puts if _num(o.get("strike")) > 0})
+        expiry = expirations[0]
+        chain = t.option_chain(expiry)
+        calls = chain.calls
+        puts = chain.puts
+        call_volume = int(calls["volume"].fillna(0).sum())
+        put_volume = int(puts["volume"].fillna(0).sum())
+        call_oi = int(calls["openInterest"].fillna(0).sum())
+        put_oi = int(puts["openInterest"].fillna(0).sum())
+
+        strikes = sorted(set(calls["strike"].tolist()) | set(puts["strike"].tolist()))
         max_pain = None
         min_pain = None
+        call_strikes = calls["strike"].values
+        call_oi_arr = calls["openInterest"].fillna(0).values
+        put_strikes = puts["strike"].values
+        put_oi_arr = puts["openInterest"].fillna(0).values
         for strike in strikes:
-            pain = sum(max(0, strike - _num(c.get("strike"))) * _num(c.get("openInterest")) for c in calls)
-            pain += sum(max(0, _num(p.get("strike")) - strike) * _num(p.get("openInterest")) for p in puts)
+            pain = float(sum(max(0, strike - cs) * coi for cs, coi in zip(call_strikes, call_oi_arr)))
+            pain += float(sum(max(0, ps - strike) * poi for ps, poi in zip(put_strikes, put_oi_arr)))
             if min_pain is None or pain < min_pain:
                 min_pain = pain
                 max_pain = strike
+
+        atm_iv = None
+        if spot and not calls.empty:
+            calls_sorted = calls.iloc[(calls["strike"] - spot).abs().argsort()]
+            atm_row = calls_sorted.iloc[0]
+            iv = atm_row.get("impliedVolatility")
+            if isinstance(iv, (int, float)) and not math.isnan(iv):
+                atm_iv = round(float(iv) * 100, 2)
+
         return {
             "available": True,
-            "source": "Yahoo Options",
-            "expiry": datetime.fromtimestamp(expiry).strftime("%Y-%m-%d") if expiry else "",
+            "source": "Yahoo Options (yfinance)",
+            "scope": "개별주 옵션",
+            "expiry": expiry,
             "call_volume": call_volume,
             "put_volume": put_volume,
             "put_call_volume_ratio": round(put_volume / call_volume, 2) if call_volume else None,
-            "max_pain": max_pain,
+            "call_open_interest": call_oi,
+            "put_open_interest": put_oi,
+            "put_call_oi_ratio": round(put_oi / call_oi, 2) if call_oi else None,
+            "max_pain": float(max_pain) if max_pain is not None else None,
             "spot_vs_max_pain_pct": round((spot / max_pain - 1) * 100, 2) if spot and max_pain else None,
+            "atm_iv": atm_iv,
         }
-    except Exception:
-        return {"available": False, "message": "옵션 데이터 조회에 실패했습니다."}
+    except Exception as e:
+        return {"available": False, "message": f"옵션 데이터 조회 실패: {str(e)[:60]}"}
 
 
 def _quote_summary(symbol: str) -> dict[str, Any]:
+    """yfinance로 회사 정보 조회. 국내 종목은 .KS/.KQ suffix 자동 시도."""
+    if yf is None:
+        return {}
+    candidates = [symbol]
     if re.fullmatch(r"\d{6}", symbol):
-        return {}
-    try:
-        url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-        params = {"modules": "assetProfile,calendarEvents,summaryDetail,price"}
-        result = requests.get(url, params=params, timeout=8).json()["quoteSummary"]["result"][0]
-        profile = result.get("assetProfile", {})
-        calendar = result.get("calendarEvents", {})
-        earnings = calendar.get("earnings", {})
-        earnings_dates = [
-            datetime.fromtimestamp(x.get("raw")).strftime("%Y-%m-%d")
-            for x in earnings.get("earningsDate", [])
-            if isinstance(x, dict) and x.get("raw")
-        ]
-        return {
-            "sector": profile.get("sector", ""),
-            "industry": profile.get("industry", ""),
-            "summary": profile.get("longBusinessSummary", ""),
-            "earnings_dates": earnings_dates,
-        }
-    except Exception:
-        return {}
+        candidates = [f"{symbol}.KS", f"{symbol}.KQ"]
+
+    for cand in candidates:
+        try:
+            t = yf.Ticker(cand)
+            info = t.info or {}
+            if not (info.get("longName") or info.get("sector") or info.get("longBusinessSummary")):
+                continue
+            upcoming: list[str] = []
+            try:
+                cal = t.calendar
+                if isinstance(cal, dict):
+                    for d in cal.get("Earnings Date", []) or []:
+                        if hasattr(d, "strftime"):
+                            upcoming.append(d.strftime("%Y-%m-%d"))
+            except Exception:
+                pass
+            return {
+                "yf_symbol": cand,
+                "name": info.get("longName") or info.get("shortName") or "",
+                "sector": info.get("sector") or "",
+                "industry": info.get("industry") or "",
+                "summary": info.get("longBusinessSummary") or "",
+                "market_cap": info.get("marketCap"),
+                "trailing_pe": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "dividend_yield": info.get("dividendYield"),
+                "earnings_dates": upcoming,
+            }
+        except Exception:
+            continue
+    return {}
 
 
-def _news(symbol: str) -> list[dict[str, str]]:
-    if re.fullmatch(r"\d{6}", symbol):
+def _news_search(query: str, lang: str = "ko", limit: int = 6) -> list[dict[str, str]]:
+    """Google News RSS로 키워드 검색. 한/영 동작."""
+    if not query.strip():
         return []
+    encoded = urllib.parse.quote(query)
+    if lang == "ko":
+        url = f"https://news.google.com/rss/search?q={encoded}&hl=ko&gl=KR&ceid=KR:ko"
+    else:
+        url = f"https://news.google.com/rss/search?q={encoded}&hl=en&gl=US&ceid=US:en"
     try:
-        url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
-        text = requests.get(url, timeout=8).text
-        items = re.findall(r"<item>(.*?)</item>", text, flags=re.S)[:6]
-        out = []
+        text = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"}).text
+        items = re.findall(r"<item>(.*?)</item>", text, flags=re.S)[:limit]
+        out: list[dict[str, str]] = []
         for item in items:
-            title = re.search(r"<title><!\[CDATA\[(.*?)\]\]></title>|<title>(.*?)</title>", item, flags=re.S)
-            link = re.search(r"<link>(.*?)</link>", item, flags=re.S)
-            pub = re.search(r"<pubDate>(.*?)</pubDate>", item, flags=re.S)
+            title_m = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", item, flags=re.S)
+            link_m = re.search(r"<link>(.*?)</link>", item, flags=re.S)
+            pub_m = re.search(r"<pubDate>(.*?)</pubDate>", item, flags=re.S)
+            source_m = re.search(r"<source[^>]*>(.*?)</source>", item, flags=re.S)
+            title = (title_m.group(1) if title_m else "").strip()
+            if not title:
+                continue
             out.append({
-                "title": (title.group(1) or title.group(2)).strip() if title else "",
-                "url": link.group(1).strip() if link else "",
-                "date": pub.group(1).strip() if pub else "",
+                "title": title,
+                "url": (link_m.group(1) if link_m else "").strip(),
+                "date": (pub_m.group(1) if pub_m else "").strip(),
+                "source": (source_m.group(1) if source_m else "").strip(),
             })
-        return [n for n in out if n["title"]]
+        return out
     except Exception:
         return []
+
+
+def _sector_keywords(symbol: str, query: str, company: dict[str, Any], lang: str) -> list[str]:
+    """LLM으로 시장/산업 동향 뉴스 검색 키워드 추출.
+
+    메타데이터(섹터/산업/회사 요약)가 비어있어도 종목명/티커만으로 동작.
+    """
+    name = company.get("name", "")
+    sector = company.get("sector", "")
+    industry = company.get("industry", "")
+    summary = (company.get("summary") or "")[:1200]
+
+    context_lines = [f"종목 티커: {symbol}"]
+    if query and query != symbol:
+        context_lines.append(f"사용자 입력 이름: {query}")
+    if name:
+        context_lines.append(f"회사명: {name}")
+    if sector:
+        context_lines.append(f"섹터: {sector}")
+    if industry:
+        context_lines.append(f"산업: {industry}")
+    if summary:
+        context_lines.append(f"회사 요약: {summary}")
+    context = "\n".join(context_lines)
+
+    lang_label = "한국어" if lang == "ko" else "영어"
+    prompt = (
+        f"{context}\n\n"
+        f"이 회사 주가를 견인하는 시장/산업 동향 뉴스 검색 키워드를 {lang_label}로 5~6개 뽑아줘.\n"
+        "조건:\n"
+        "- 각 키워드는 뉴스 검색에 그대로 쓸 수 있는 구체적 형태\n"
+        "- 회사 비즈니스의 핵심 동력에 초점 (제품 가격 사이클, 수요/공급, capex, "
+        "주요 고객사 동향, 정책/규제, 원자재, 환율 등)\n"
+        "- 추상적 단어('반도체', 'Technology', 'Computer Hardware')는 피하고 동향 중심으로\n"
+        "- 좋은 예: 'NAND 가격 동향', 'HBM 수요', '메모리 capex', '낸드 숏티지', "
+        "'주택 분양 시장', '해외 플랜트 수주', '데이터센터 capex'\n\n"
+        "쉼표 구분으로만 답하고 다른 설명은 추가하지 마."
+    )
+    text = _anthropic_message("너는 시장 분석 보조자다.", prompt, max_tokens=250)
+    if not text:
+        out = []
+        if industry:
+            out.append(industry)
+        if sector and sector != industry:
+            out.append(sector)
+        return out
+    parts = [p.strip(" \"'.").strip() for p in text.split(",")]
+    return [p for p in parts if p][:6]
+
+
+_KR_CODE_TO_NAME: dict[str, str] = {}
+
+
+def _kr_code_to_name(code: str) -> str:
+    if not re.fullmatch(r"\d{6}", code):
+        return ""
+    if not _KR_CODE_TO_NAME:
+        idx = _kr_name_index()
+        for name_key, c in idx.items():
+            _KR_CODE_TO_NAME[c] = name_key
+    return _KR_CODE_TO_NAME.get(code, "")
+
+
+def _news_for_symbol(query: str, resolved: dict[str, str], company: dict[str, Any]) -> dict[str, Any]:
+    """직접/섹터/관련주 카테고리별 뉴스."""
+    symbol = resolved["symbol"]
+    market = resolved["market"]
+    lang = "ko" if market == "KR" else "en"
+
+    if market == "KR":
+        direct_q = query or _kr_code_to_name(symbol) or symbol
+    else:
+        direct_q = symbol
+
+    direct_news = _news_search(direct_q, lang=lang, limit=6)
+
+    keywords = _sector_keywords(symbol, query, company, lang)
+    seen_titles: set[str] = {n["title"] for n in direct_news}
+    sector_news: list[dict[str, str]] = []
+    for kw in keywords:
+        for n in _news_search(kw, lang=lang, limit=3):
+            if n["title"] in seen_titles:
+                continue
+            seen_titles.add(n["title"])
+            n["keyword"] = kw
+            sector_news.append(n)
+        if len(sector_news) >= 8:
+            break
+
+    peer_news: list[dict[str, str]] = []
+    peer_symbols = PEER_MAP.get(symbol, [])[:4]
+    for peer in peer_symbols:
+        peer_resolved = resolve_symbol(peer)
+        peer_lang = "ko" if peer_resolved["market"] == "KR" else "en"
+        if peer_resolved["market"] == "KR":
+            peer_q = _kr_code_to_name(peer) or peer
+        else:
+            peer_q = peer
+        for n in _news_search(peer_q, lang=peer_lang, limit=2):
+            if n["title"] in seen_titles:
+                continue
+            seen_titles.add(n["title"])
+            n["peer"] = peer
+            peer_news.append(n)
+
+    return {
+        "direct": direct_news,
+        "sector": sector_news[:8],
+        "peers": peer_news[:8],
+        "keywords": keywords,
+    }
+
+
+def _market_news() -> dict[str, list[dict[str, str]]]:
+    """미국/국내 시황 뉴스."""
+    return {
+        "us": _news_search("US stock market today S&P 500 Nasdaq", lang="en", limit=5),
+        "kr": _news_search("코스피 코스닥 오늘 증시 동향", lang="ko", limit=5),
+    }
+
+
+def _earnings_detail(symbol: str) -> dict[str, Any]:
+    """yfinance earnings_history + calendar (미국주만)."""
+    if re.fullmatch(r"\d{6}", symbol):
+        return {
+            "available": False,
+            "message": "국내 종목 실적 디테일은 별도 데이터 소스가 필요합니다.",
+        }
+    if yf is None:
+        return {"available": False, "message": "yfinance 패키지가 설치되지 않았습니다."}
+    try:
+        t = yf.Ticker(symbol)
+        past: list[dict[str, Any]] = []
+        try:
+            eh = t.earnings_history
+            if eh is not None and not eh.empty:
+                for idx, row in eh.iterrows():
+                    qstr = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)
+                    est = row.get("epsEstimate")
+                    act = row.get("epsActual")
+                    diff_pct = row.get("surprisePercent")
+                    past.append({
+                        "quarter": qstr,
+                        "eps_estimate": float(est) if isinstance(est, (int, float)) and not math.isnan(est) else None,
+                        "eps_actual": float(act) if isinstance(act, (int, float)) and not math.isnan(act) else None,
+                        "surprise_pct": round(float(diff_pct) * 100, 2) if isinstance(diff_pct, (int, float)) and not math.isnan(diff_pct) else None,
+                    })
+        except Exception:
+            pass
+
+        future_estimates: list[dict[str, Any]] = []
+        upcoming_dates: list[str] = []
+        try:
+            cal = t.calendar
+            if isinstance(cal, dict):
+                for d in cal.get("Earnings Date", []) or []:
+                    if hasattr(d, "strftime"):
+                        upcoming_dates.append(d.strftime("%Y-%m-%d"))
+                eps_avg = cal.get("Earnings Average")
+                if isinstance(eps_avg, (int, float)):
+                    future_estimates.append({
+                        "period": "next",
+                        "label": "다음 실적 컨센서스",
+                        "eps_avg": float(eps_avg),
+                        "eps_low": float(cal["Earnings Low"]) if isinstance(cal.get("Earnings Low"), (int, float)) else None,
+                        "eps_high": float(cal["Earnings High"]) if isinstance(cal.get("Earnings High"), (int, float)) else None,
+                        "revenue_avg": float(cal["Revenue Average"]) if isinstance(cal.get("Revenue Average"), (int, float)) else None,
+                        "revenue_low": float(cal["Revenue Low"]) if isinstance(cal.get("Revenue Low"), (int, float)) else None,
+                        "revenue_high": float(cal["Revenue High"]) if isinstance(cal.get("Revenue High"), (int, float)) else None,
+                    })
+        except Exception:
+            pass
+
+        if not past and not future_estimates and not upcoming_dates:
+            return {"available": False, "message": "Yahoo에서 실적 데이터를 받지 못했습니다."}
+
+        return {
+            "available": True,
+            "source": "Yahoo Finance (yfinance)",
+            "past": past[-6:],
+            "future_estimates": future_estimates,
+            "upcoming_dates": upcoming_dates,
+        }
+    except Exception as e:
+        return {"available": False, "message": f"실적 데이터 조회 실패: {str(e)[:60]}"}
 
 
 def _peer_rows(symbol: str) -> list[dict[str, Any]]:
@@ -606,6 +1067,12 @@ def _peer_rows(symbol: str) -> list[dict[str, Any]]:
 
 
 def _analysis_context(analysis: dict[str, Any]) -> dict[str, Any]:
+    news = analysis.get("news") or {}
+    direct_titles = [n.get("title") for n in (news.get("direct") or [])[:5]]
+    sector_titles = [n.get("title") for n in (news.get("sector") or [])[:5]]
+    peer_titles = [n.get("title") for n in (news.get("peers") or [])[:5]]
+    events = analysis.get("events") or {}
+    earnings = events.get("earnings") if isinstance(events, dict) else None
     return {
         "symbol": analysis.get("symbol"),
         "quote": analysis.get("quote"),
@@ -615,8 +1082,11 @@ def _analysis_context(analysis: dict[str, Any]) -> dict[str, Any]:
         "pressure": analysis.get("pressure"),
         "options": analysis.get("options"),
         "peers": analysis.get("peers"),
-        "events": analysis.get("events"),
-        "news_titles": [n.get("title") for n in analysis.get("news", [])[:5]],
+        "earnings": earnings,
+        "news_direct": direct_titles,
+        "news_sector": sector_titles,
+        "news_peers": peer_titles,
+        "sector_keywords": news.get("keywords") or [],
     }
 
 
@@ -733,15 +1203,15 @@ def build_stock_analysis(query: str) -> dict[str, Any]:
         "options": options,
         "peers": _peer_rows(resolved["symbol"]),
         "company": summary,
-        "news": _news(resolved["symbol"]),
+        "news": _news_for_symbol(query, resolved, summary),
+        "market_news": _market_news(),
         "events": {
-            "past": ["최근 실적 발표/가이던스 변화", "지수 편입·대형 수급 이벤트 여부 확인"],
-            "future": summary.get("earnings_dates", []) or ["다음 실적 발표 일정 확인 필요"],
+            "earnings": _earnings_detail(resolved["symbol"]),
         },
         "notes": [
-            "옵션 데이터는 미국 종목에 한해 Yahoo 옵션 체인으로 계산합니다.",
-            "매수세/매도세는 일봉 상승일·하락일 거래량 기반의 추정치입니다.",
-            "단기 지지/저항은 한국투자 5분봉 데이터가 있을 때만 계산합니다.",
+            "옵션 데이터: 국내는 KOSPI200 지수옵션(시장 분위기), 미국은 Yahoo 체인.",
+            "뉴스: 직접/섹터/관련주 카테고리는 Google News 검색, 시황은 별도.",
+            "실적 디테일은 미국 종목만 Yahoo earnings로 가져옵니다.",
         ],
     }
     analysis["llm_strategy"] = _llm_strategy(analysis)

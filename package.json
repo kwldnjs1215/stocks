@@ -1,0 +1,18 @@
+{
+  "name": "stocks",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "predev": "kill-port 8001 5176",
+    "dev": "concurrently -k -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": ".venv\\Scripts\\python.exe run_backend.py",
+    "dev:frontend": "npm --prefix frontend run dev -- --host 0.0.0.0 --port 5176 --strictPort",
+    "kill": "kill-port 8001 5176",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "kill-port": "^2.0.1"
+  }
+}
